@@ -58,6 +58,13 @@ jobs:
           python ensure_utf8.py
         shell: cmd
 
+      # Логирование хэша bot.py перед сборкой
+      - name: Log SHA256 hash of bot.py
+        run: |
+          certutil -hashfile bot.py SHA256 > bot_py_hash.txt
+          type bot_py_hash.txt
+        shell: cmd
+
       # Извлечение версии и changelog
       - name: Get version and changelog from version.json
         id: version
@@ -87,10 +94,10 @@ jobs:
           if exist "VideoBot" rmdir /s /q "VideoBot"
           if exist "dist" rmdir /s /q "dist"
           if exist "build" rmdir /s /q "build"
-          mkdir "dist"
+          if exist "%TEMP%\cx_freeze" rmdir /s /q "%TEMP%\cx_freeze"
           del /s /q *.pyc
           if exist "__pycache__" rmdir /s /q "__pycache__"
-          if exist "%TEMP%\cx_freeze" rmdir /s /q "%TEMP%\cx_freeze"
+          mkdir "dist"
         shell: cmd
 
       # Сборка полного релиза
