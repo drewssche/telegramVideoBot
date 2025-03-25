@@ -1009,16 +1009,13 @@ class AuthWindow(QMainWindow):
             logging.info(f"Текущая версия программы: {CURRENT_VERSION}")
 
             if self.compare_versions(latest_version, CURRENT_VERSION) > 0:
-                logging.info(f"Найдена новая версия: {latest_version}")
                 self.is_major_release = self.is_major_version(latest_version)
-                logging.info(f"Это крупный релиз: {self.is_major_release}")
 
                 # Ищем архив VideoBot_vX.Y.Z.zip
                 asset = None
                 asset_hash = None
                 for asset in release_data["assets"]:
                     if asset["name"] == f"VideoBot_v{latest_version}.zip":
-                        logging.info(f"Найден архив: {asset['name']}")
                         for hash_asset in release_data["assets"]:
                             if hash_asset["name"] == f"VideoBot_v{latest_version}.zip.sha256":
                                 hash_response = requests.get(hash_asset["browser_download_url"])
@@ -1055,7 +1052,6 @@ class AuthWindow(QMainWindow):
                 self.update_button.setVisible(True)
                 self.status_label.setText(f"Доступна новая версия: {latest_version}")
                 self.status_label.setStyleSheet("color: #00FF00")
-                logging.info("Кнопка 'Обновить' отображена")
             else:
                 logging.info("Установлена последняя версия")
                 self.status_label.setText("У вас последняя версия")
@@ -1110,7 +1106,6 @@ class AuthWindow(QMainWindow):
         logging.info(f"Начало обновления до версии {self.new_version}")
         logging.info(f"URL для скачивания: {self.download_url}")
         logging.info(f"Ожидаемый хэш: {self.download_hash}")
-        logging.info(f"Тип обновления: {'Полное' if self.is_full_update else 'Инкрементальное'}")
 
         # Создаём прогресс-бар
         progress = QProgressDialog("Скачивание обновления...", "Отмена", 0, 100, self)
@@ -1186,7 +1181,6 @@ class AuthWindow(QMainWindow):
         try:
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
                 zip_contents = zip_ref.namelist()
-                logging.info(f"Содержимое архива перед распаковкой: {zip_contents}")
                 # Ищем VideoBot.exe в архиве
                 exe_in_zip = None
                 for f in zip_contents:
@@ -1254,7 +1248,7 @@ class AuthWindow(QMainWindow):
 
             if not use_7z:
                 logging.warning("7z.exe не найден. Используем powershell для извлечения архива.")
-                bat_content = f"""@echo off
+                bat_content = f"""@echo on
                     echo [%date% %time%] Начало выполнения update.bat >> update.log 2>&1
 
                     :: Задержка, чтобы убедиться, что программа полностью закрылась
@@ -1341,7 +1335,7 @@ class AuthWindow(QMainWindow):
                     """
             else:
                 # Используем 7z.exe для извлечения архива
-                bat_content = f"""@echo off
+                bat_content = f"""@echo on
                     echo [%date% %time%] Начало выполнения update.bat >> update.log 2>&1
 
                     :: Задержка, чтобы убедиться, что программа полностью закрылась
@@ -1463,8 +1457,8 @@ class AuthWindow(QMainWindow):
                 return
 
             # Задержка перед закрытием программы (увеличиваем до 7 секунд)
-            logging.info("Ожидание перед закрытием программы (7 секунд)...")
-            time.sleep(7)
+            logging.info("Ожидание перед закрытием программы (5 секунд)...")
+            time.sleep(5)
 
             # Закрываем приложение после запуска update.bat
             logging.info("Закрытие приложения")
