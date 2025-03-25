@@ -1420,79 +1420,17 @@ class AuthWindow(QMainWindow):
                 finally:
                     state.client = None
 
-            # Проверяем состояние службы Планировщика задач
-            logging.info("Проверка состояния службы Планировщика задач")
+            # Запускаем update.bat через команду start с задержкой
+            logging.info("Запуск скрипта обновления через команду start")
             try:
-                result = subprocess.run('sc query Schedule', capture_output=True, text=True, shell=True)
-                logging.info(f"Состояние службы Планировщика задач: {result.stdout}")
-                if result.returncode != 0:
-                    logging.error(f"Ошибка при проверке службы Планировщика задач: {result.stderr}")
-                    self.show_notification(
-                        "Не удалось проверить состояние службы Планировщика задач. Убедитесь, что служба запущена.",
-                        "error"
-                    )
-                    return
+                # Используем команду start с ping для создания задержки 3 секунды
+                command = f'start "" cmd /c "ping 127.0.0.1 -n 4 > nul & "{bat_path}""'
+                os.system(command)
+                logging.info("Скрипт обновления успешно запущен через команду start")
             except Exception as e:
-                logging.error(f"Не удалось проверить состояние службы Планировщика задач: {str(e)}")
+                logging.error(f"Не удалось запустить update.bat через команду start: {str(e)}")
                 self.show_notification(
-                    "Не удалось проверить состояние службы Планировщика задач. Убедитесь, что служба запущена.",
-                    "error"
-                )
-                return
-
-            # Запуск update.bat через Планировщик задач
-            logging.info("Запуск скрипта обновления через Планировщик задач с правами администратора")
-            try:
-                # Создаём задачу в Планировщике задач (без параметров /sd и /st)
-                task_name = "RunUpdateBat"
-                create_command = (
-                    f'schtasks /create /tn "{task_name}" /tr "cmd.exe /c \\"{bat_path}\\"" '
-                    f'/sc once /ru "System" /rl HIGHEST /f'
-                )
-                run_command = f'schtasks /run /tn "{task_name}"'
-                delete_command = f'schtasks /delete /tn "{task_name}" /f'
-
-                # Создаём задачу
-                logging.info(f"Создание задачи в Планировщике задач: {create_command}")
-                result = subprocess.run(create_command, shell=True, capture_output=True, text=True)
-                if result.returncode != 0:
-                    logging.error(f"Не удалось создать задачу в Планировщике задач: {result.returncode}")
-                    logging.error(f"Вывод команды: {result.stdout}")
-                    logging.error(f"Ошибка команды: {result.stderr}")
-                    self.show_notification(
-                        f"Не удалось создать задачу для обновления. Ошибка: {result.stderr}",
-                        "error"
-                    )
-                    return
-
-                # Запускаем задачу
-                logging.info(f"Запуск задачи: {run_command}")
-                run_result = subprocess.run(run_command, shell=True, capture_output=True, text=True)
-                if run_result.returncode != 0:
-                    logging.error(f"Не удалось запустить задачу в Планировщике задач: {run_result.returncode}")
-                    logging.error(f"Вывод команды: {run_result.stdout}")
-                    logging.error(f"Ошибка команды: {run_result.stderr}")
-                    self.show_notification(
-                        f"Не удалось запустить задачу для обновления. Ошибка: {run_result.stderr}",
-                        "error"
-                    )
-                    # Удаляем задачу в случае ошибки
-                    subprocess.run(delete_command, shell=True)
-                    return
-
-                # Удаляем задачу после запуска
-                logging.info(f"Удаление задачи: {delete_command}")
-                delete_result = subprocess.run(delete_command, shell=True, capture_output=True, text=True)
-                if delete_result.returncode != 0:
-                    logging.warning(f"Не удалось удалить задачу из Планировщика задач: {delete_result.returncode}")
-                    logging.warning(f"Вывод команды: {delete_result.stdout}")
-                    logging.warning(f"Ошибка команды: {delete_result.stderr}")
-
-                logging.info("Скрипт обновления успешно запланирован через Планировщик задач")
-            except Exception as e:
-                logging.error(f"Не удалось запустить update.bat через Планировщик задач: {str(e)}")
-                self.show_notification(
-                    "Не удалось запустить скрипт обновления. Пожалуйста, проверьте права доступа и состояние Планировщика задач.",
+                    f"Не удалось запустить скрипт обновления: {str(e)}",
                     "error"
                 )
                 return
