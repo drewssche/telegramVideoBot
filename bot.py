@@ -1002,98 +1002,77 @@ class AuthWindow(QMainWindow):
         logging.info("Открыто окно 'О программе'")
 
     def check_for_updates(self):
+        logging.info("Начало проверки обновлений")
         try:
             api_url = "https://api.github.com/repos/drewssche/telegramVideoBot/releases/latest"
+            logging.info(f"Запрос к GitHub API: {api_url}")
             response = requests.get(api_url, timeout=10)
             response.raise_for_status()
 
             release_data = response.json()
             latest_version = release_data["tag_name"].lstrip("v")
+            logging.info(f"Последняя версия на GitHub: {latest_version}")
+            logging.info(f"Текущая версия программы: {CURRENT_VERSION}")
 
             if self.compare_versions(latest_version, CURRENT_VERSION) > 0:
+                logging.info(f"Найдена новая версия: {latest_version}")
                 self.is_major_release = self.is_major_version(latest_version)
-                full_asset = None
-                update_asset = None
-                full_hash = None
-                update_hash = None
-                for asset in release_data["assets"]:
-                    if asset["name"] == f"VideoBot_Full_v{latest_version}.zip":
-                        full_asset = asset
-                        for hash_asset in release_data["assets"]:
-                            if hash_asset["name"] == f"VideoBot_Full_v{latest_version}.zip.sha256":
-                                hash_response = requests.get(hash_asset["browser_download_url"])
-                                hash_response.raise_for_status()
-                                # Парсим хэш из текста
-                                hash_text = hash_response.text.strip()
-                                hash_lines = hash_text.splitlines()
-                                # Ищем строку, которая содержит только хэш (64 символа, hex)
-                                for line in hash_lines:
-                                    line = line.strip()
-                                    if len(line) == 64 and all(c in "0123456789abcdefABCDEF" for c in line):
-                                        full_hash = line
-                                        break
-                                if not full_hash:
-                                    logging.error("Не удалось извлечь хэш из файла для полного релиза")
-                                    self.status_label.setText("Не удалось проверить хэш полного релиза")
-                                    self.status_label.setStyleSheet("color: #FFFF00")
-                                    return
-                                break
-                    elif asset["name"] == f"VideoBot_Update_v{latest_version}.zip":
-                        update_asset = asset
-                        for hash_asset in release_data["assets"]:
-                            if hash_asset["name"] == f"VideoBot_Update_v{latest_version}.zip.sha256":
-                                hash_response = requests.get(hash_asset["browser_download_url"])
-                                hash_response.raise_for_status()
-                                # Парсим хэш из текста
-                                hash_text = hash_response.text.strip()
-                                hash_lines = hash_text.splitlines()
-                                # Ищем строку, которая содержит только хэш (64 символа, hex)
-                                for line in hash_lines:
-                                    line = line.strip()
-                                    if len(line) == 64 and all(c in "0123456789abcdefABCDEF" for c in line):
-                                        update_hash = line
-                                        break
-                                if not update_hash:
-                                    logging.error("Не удалось извлечь хэш из файла для обновления")
-                                    self.status_label.setText("Не удалось проверить хэш обновления")
-                                    self.status_label.setStyleSheet("color: #FFFF00")
-                                    return
-                                break
+                logging.info(f"Это крупный релиз: {self.is_major_release}")
 
-                if CURRENT_VERSION == "0.0.0" or self.is_major_release:
-                    if full_asset:
-                        self.download_url = full_asset["browser_download_url"]
-                        self.download_hash = full_hash
-                        self.is_full_update = True
-                    else:
-                        self.status_label.setText("Полный архив для новой версии не найден")
-                        self.status_label.setStyleSheet("color: #FFFF00")
-                        return
+                # Ищем архив VideoBot_vX.Y.Z.zip
+                asset = None
+                asset_hash = None
+                for asset in release_data["assets"]:
+                    if asset["name"] == f"VideoBot_v{latest_version}.zip":
+                        logging.info(f"Найден архив: {asset['name']}")
+                        for hash_asset in release_data["assets"]:
+                            if hash_asset["name"] == f"VideoBot_v{latest_version}.zip.sha256":
+                                hash_response = requests.get(hash_asset["browser_download_url"])
+                                hash_response.raise_for_status()
+                                hash_text = hash_response.text.strip()
+                                hash_lines = hash_text.splitlines()
+                                for line in hash_lines:
+                                    line = line.strip()
+                                    if len(line) == 64 and all(c in "0123456789abcdefABCDEF" for c in line):
+                                        asset_hash = line
+                                        break
+                                if not asset_hash:
+                                    logging.error("Не удалось извлечь хэш из файла")
+                                    self.status_label.setText("Не удалось проверить хэш релиза")
+                                    self.status_label.setStyleSheet("color: #FFFF00")
+                                    return
+                                break
+                        break
+
+                if asset:
+                    self.download_url = asset["browser_download_url"]
+                    self.download_hash = asset_hash
+                    self.is_full_update = True  # Всегда полное обновление
+                    logging.info(f"URL для скачивания: {self.download_url}")
+                    logging.info(f"Хэш архива: {self.download_hash}")
                 else:
-                    if update_asset:
-                        self.download_url = update_asset["browser_download_url"]
-                        self.download_hash = update_hash
-                        self.is_full_update = False
-                    else:
-                        self.status_label.setText("Архив обновления для новой версии не найден")
-                        self.status_label.setStyleSheet("color: #FFFF00")
-                        return
+                    logging.error(f"Архив VideoBot_v{latest_version}.zip не найден")
+                    self.status_label.setText(f"Архив для версии {latest_version} не найден")
+                    self.status_label.setStyleSheet("color: #FFFF00")
+                    return
 
                 self.changelog = release_data.get("body", "Чейнджлог отсутствует")
                 self.new_version = latest_version
                 self.update_button.setVisible(True)
                 self.status_label.setText(f"Доступна новая версия: {latest_version}")
                 self.status_label.setStyleSheet("color: #00FF00")
+                logging.info("Кнопка 'Обновить' отображена")
             else:
+                logging.info("Установлена последняя версия")
                 self.status_label.setText("У вас последняя версия")
                 self.status_label.setStyleSheet("color: #D3D3D3")
         except requests.exceptions.ConnectionError:
             logging.error("Ошибка подключения к интернету при проверке обновлений")
-            self.status_label.setText("Не удалось проверить обновления")
+            self.status_label.setText("Не удалось проверить обновления: нет интернета")
             self.status_label.setStyleSheet("color: #FFFF00")
         except requests.exceptions.HTTPError as http_err:
             logging.error(f"HTTP ошибка при проверке обновлений: {str(http_err)}")
-            self.status_label.setText("Не удалось проверить обновления")
+            self.status_label.setText("Не удалось проверить обновления: ошибка HTTP")
             self.status_label.setStyleSheet("color: #FFFF00")
         except Exception as e:
             logging.error(f"Ошибка проверки обновлений: {str(e)}")
