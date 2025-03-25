@@ -1241,13 +1241,6 @@ class AuthWindow(QMainWindow):
                     :: Задержка после распаковки
                     timeout /t 2 /nobreak >nul
 
-                    :: Проверка наличия нового VideoBot.exe
-                    if not exist "VideoBot.exe" (
-                        echo [%date% %time%] Ошибка: Новый VideoBot.exe не найден по пути VideoBot.exe >> update.log 2>&1
-                        exit /b 1
-                    )
-                    echo [%date% %time%] Новый VideoBot.exe найден по пути VideoBot.exe >> update.log 2>&1
-
                     :: Обновление version.json
                     echo [%date% %time%] Обновление version.json >> update.log 2>&1
                     echo {{"version": "{self.new_version}"}} > "version.json" 2>> update.log
@@ -1316,13 +1309,6 @@ class AuthWindow(QMainWindow):
 
                     :: Задержка после распаковки
                     timeout /t 2 /nobreak >nul
-
-                    :: Проверка наличия нового VideoBot.exe
-                    if not exist "VideoBot.exe" (
-                        echo [%date% %time%] Ошибка: Новый VideoBot.exe не найден по пути VideoBot.exe >> update.log 2>&1
-                        exit /b 1
-                    )
-                    echo [%date% %time%] Новый VideoBot.exe найден по пути VideoBot.exe >> update.log 2>&1
 
                     :: Обновление version.json
                     echo [%date% %time%] Обновление version.json >> update.log 2>&1

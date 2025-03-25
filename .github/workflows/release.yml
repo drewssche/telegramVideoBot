@@ -46,6 +46,22 @@ jobs:
           choco install 7zip -y
         shell: cmd
 
+      # Создание манифеста для запуска с правами администратора
+      - name: Create manifest file
+        run: |
+          echo ^<?xml version="1.0" encoding="UTF-8" standalone="yes"?^> > VideoBot.exe.manifest
+          echo ^<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0"^> >> VideoBot.exe.manifest
+          echo ^    ^<trustInfo xmlns="urn:schemas-microsoft-com:asm.v3"^> >> VideoBot.exe.manifest
+          echo ^        ^<security^> >> VideoBot.exe.manifest
+          echo ^            ^<requestedPrivileges^> >> VideoBot.exe.manifest
+          echo ^                ^<requestedExecutionLevel level="requireAdministrator" uiAccess="false"/^> >> VideoBot.exe.manifest
+          echo ^            ^</requestedPrivileges^> >> VideoBot.exe.manifest
+          echo ^        ^</security^> >> VideoBot.exe.manifest
+          echo ^    ^</trustInfo^> >> VideoBot.exe.manifest
+          echo ^</assembly^> >> VideoBot.exe.manifest
+          type VideoBot.exe.manifest
+        shell: cmd
+
       # Проверка кодировки JSON файлов
       - name: Ensure JSON files are in UTF-8
         run: |

@@ -40,7 +40,9 @@ executables = [
         script="bot.py",
         base=base,
         target_name="VideoBot.exe",
-        icon="icons/256.ico"
+        icon="icons/256.ico",
+        # Указываем манифест для cx_Freeze
+        uac_admin=True  # Это автоматически добавляет требование прав администратора
     )
 ]
 
@@ -103,6 +105,11 @@ for dll in mingw_dlls:
     else:
         print(f"Warning: {dll} not found at {dll_path}")
 
+# Добавляем манифест в include_files
+manifest_file = "VideoBot.exe.manifest"
+if not os.path.exists(manifest_file):
+    print(f"Warning: {manifest_file} not found. It should be created before building.")
+
 # Полный релиз
 full_build_options = {
     "packages": packages,
@@ -113,6 +120,7 @@ full_build_options = {
         ("help_content.json", "help_content.json"),
         ("temp-files", "temp-files"),
         ("icons", "icons"),
+        (manifest_file, manifest_file),  # Добавляем манифест
     ] + qt_plugins_includes + qt_dll_includes + qt_system_dll_includes,
     "build_exe": "VideoBot",
     "replace_paths": []
@@ -127,6 +135,7 @@ incremental_build_options = {
         ("version.json", "version.json"),
         ("help_content.json", "help_content.json"),
         ("icons", "icons"),
+        (manifest_file, manifest_file),  # Добавляем манифест
     ] + qt_plugins_includes + qt_dll_includes + qt_system_dll_includes,
     "build_exe": "VideoBot",
     "replace_paths": []
