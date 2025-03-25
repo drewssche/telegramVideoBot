@@ -93,12 +93,6 @@ jobs:
           if exist "%TEMP%\cx_freeze" rmdir /s /q "%TEMP%\cx_freeze"
         shell: cmd
 
-      # Логирование содержимого bot.py для отладки
-      - name: Log bot.py content
-        run: |
-          type bot.py
-        shell: cmd
-
       # Сборка полного релиза
       - name: Build Full Release
         if: steps.major_release.outputs.IS_MAJOR == 'true'

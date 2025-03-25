@@ -1,7 +1,7 @@
 {
-    "version": "1.0.1",
+    "version": "1.0.2",
     "changelog": [
-        "Тест инкрементального релиза"
+        "Фикс минорного апдейта"
     ],
 "last_full_release_url": "https://github.com/drewssche/telegramVideoBot/releases/tag/v1.0.0"
 }

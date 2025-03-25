@@ -1265,47 +1265,59 @@ class AuthWindow(QMainWindow):
 
             # Создаём update.bat
             bat_content = f"""@echo off
-                set "attempts=3"
-                set "delay=5"
-                echo %date% %time% - Попытка завершения процесса >> update.log
-                :try_terminate
-                timeout /t %delay% >nul
-                taskkill /im VideoBot.exe /f >nul 2>&1
-                if errorlevel 1 (
-                    set /a attempts-=1
-                    echo %date% %time% - Не удалось завершить процесс, осталось попыток: %attempts% >> update.log
-                    if %attempts% gtr 0 (
-                        goto try_terminate
-                    ) else (
-                        echo %date% %time% - Не удалось завершить процесс VideoBot.exe после нескольких попыток >> update.log
-                        exit /b 1
-                    )
-                )
-                echo %date% %time% - Процесс успешно завершён >> update.log
+                echo %date% %time% - Начало выполнения update.bat >> update.log 2>&1
 
                 :: Распаковка архива в текущую директорию
-                powershell -Command "Expand-Archive -Path '{zip_path}' -DestinationPath '{current_dir}' -Force" >nul 2>&1
+                echo %date% %time% - Распаковка архива {zip_path} >> update.log 2>&1
+                powershell -Command "Expand-Archive -Path '{zip_path}' -DestinationPath '{current_dir}' -Force" >> update.log 2>&1
                 if errorlevel 1 (
-                    echo %date% %time% - Не удалось распаковать архив >> update.log
+                    echo %date% %time% - Не удалось распаковать архив >> update.log 2>&1
                     exit /b 1
                 )
-                echo %date% %time% - Архив успешно распакован >> update.log
+                echo %date% %time% - Архив успешно распакован >> update.log 2>&1
+
+                :: Проверка наличия нового VideoBot.exe
+                if not exist "{new_exe}" (
+                    echo %date% %time% - Новый VideoBot.exe не найден по пути {new_exe} >> update.log 2>&1
+                    exit /b 1
+                )
+                echo %date% %time% - Новый VideoBot.exe найден по пути {new_exe} >> update.log 2>&1
 
                 :: Обновление version.json
-                echo {{"version": "{self.new_version}"}} > "{current_dir}\\version.json"
-                echo %date% %time% - Файл version.json обновлён >> update.log
+                echo %date% %time% - Обновление version.json >> update.log 2>&1
+                echo {{"version": "{self.new_version}"}} > "{current_dir}\\version.json" 2>> update.log
+                if errorlevel 1 (
+                    echo %date% %time% - Не удалось обновить version.json >> update.log 2>&1
+                    exit /b 1
+                )
+                echo %date% %time% - Файл version.json обновлён >> update.log 2>&1
 
                 :: Удаление временных файлов
-                del "{zip_path}" >nul 2>&1
-                echo %date% %time% - Архив удалён >> update.log
+                echo %date% %time% - Удаление архива {zip_path} >> update.log 2>&1
+                del "{zip_path}" >> update.log 2>&1
+                if errorlevel 1 (
+                    echo %date% %time% - Не удалось удалить архив >> update.log 2>&1
+                    exit /b 1
+                )
+                echo %date% %time% - Архив удалён >> update.log 2>&1
 
                 :: Запуск новой версии
-                start "" "{new_exe}"
-                echo %date% %time% - Новая версия запущена >> update.log
+                echo %date% %time% - Запуск новой версии {new_exe} >> update.log 2>&1
+                start "" "{new_exe}" >> update.log 2>&1
+                if errorlevel 1 (
+                    echo %date% %time% - Не удалось запустить новую версию >> update.log 2>&1
+                    exit /b 1
+                )
+                echo %date% %time% - Новая версия запущена >> update.log 2>&1
 
                 :: Удаление bat-файла
-                del "{bat_path}" >nul 2>&1
-                echo %date% %time% - Скрипт обновления удалён >> update.log
+                echo %date% %time% - Удаление скрипта обновления {bat_path} >> update.log 2>&1
+                del "{bat_path}" >> update.log 2>&1
+                if errorlevel 1 (
+                    echo %date% %time% - Не удалось удалить скрипт обновления >> update.log 2>&1
+                    exit /b 1
+                )
+                echo %date% %time% - Скрипт обновления удалён >> update.log 2>&1
                 """
             logging.info(f"Создание скрипта обновления: {bat_path}")
             with open(bat_path, "w", encoding="utf-8") as bat_file:
@@ -1327,17 +1339,25 @@ class AuthWindow(QMainWindow):
                 finally:
                     state.client = None
 
-            # Запуск update.bat с правами администратора
-            logging.info("Запуск скрипта обновления с правами администратора")
-            ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", f'/c "{bat_path}"', None, 1)
-
-            # Закрываем все окна и выходим
+            # Закрываем приложение перед запуском update.bat
             logging.info("Закрытие приложения")
             self.close()  # Закрываем текущее окно
             QApplication.quit()
-            # Принудительное завершение, если QApplication.quit() не сработал
+            # Даём время на завершение процесса
+            time.sleep(1)
             logging.info("Принудительное завершение программы")
             sys.exit(0)
+
+            # Запуск update.bat с правами администратора
+            logging.info("Запуск скрипта обновления с правами администратора")
+            result = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", f'/c "{bat_path}"', None, 1)
+            if result <= 32:
+                logging.error(f"Не удалось запустить update.bat с правами администратора, код ошибки: {result}")
+                self.show_notification(
+                    "Не удалось запустить скрипт обновления. Пожалуйста, запустите программу от имени администратора.",
+                    "error"
+                )
+                return
 
         except Exception as e:
             logging.error(f"Ошибка при выполнении обновления: {str(e)}")
