@@ -1144,7 +1144,7 @@ class AuthWindow(QMainWindow):
 
         # Добавляем задержку, чтобы дать системе время обработать файл
         logging.info("Ожидание завершения записи файла на диск...")
-        time.sleep(2)  # Задержка 2 секунды
+        time.sleep(2)
 
         logging.info("Скачивание завершено успешно, проверка хэша архива")
         # Валидация архива
@@ -1233,9 +1233,8 @@ class AuthWindow(QMainWindow):
             # Проверяем наличие 7z.exe
             use_7z = False
             possible_7z_paths = [
-                "C:\\Program Files\\7-Zip\\7z.exe",   # Сначала проверяем твой путь
+                "C:\\Program Files\\7-Zip\\7z.exe",   # Сначала проверяем стандартный путь
                 "C:\\Program Files (x86)\\7-Zip\\7z.exe",  # Для 32-битной версии на 64-битной системе
-                os.path.join(os.getcwd(), "7z.exe"),  # Проверяем в текущей директории (если ты решишь скопировать)
             ]
 
             for path in possible_7z_paths:
@@ -1255,7 +1254,6 @@ class AuthWindow(QMainWindow):
 
             if not use_7z:
                 logging.warning("7z.exe не найден. Используем powershell для извлечения архива.")
-                # Запасной вариант с powershell
                 bat_content = f"""@echo off
                     echo [%date% %time%] Начало выполнения update.bat >> update.log 2>&1
 
@@ -1264,8 +1262,8 @@ class AuthWindow(QMainWindow):
                     echo [%date% %time%] Задержка перед началом распаковки завершена >> update.log 2>&1
 
                     :: Распаковка архива в текущую директорию
-                    echo [%date% %time%] Распаковка архива {zip_path} в {current_dir} >> update.log 2>&1
-                    powershell -Command "Expand-Archive -Path '{zip_path}' -DestinationPath '{current_dir}' -Force" >> update.log 2>&1
+                    echo [%date% %time%] Распаковка архива {zip_path} >> update.log 2>&1
+                    powershell -Command "Expand-Archive -Path '{zip_path}' -DestinationPath '.' -Force" >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
                         echo [%date% %time%] Ошибка: Не удалось распаковать архив >> update.log 2>&1
                         exit /b 1
@@ -1276,15 +1274,27 @@ class AuthWindow(QMainWindow):
                     timeout /t 2 /nobreak >nul
 
                     :: Проверка наличия нового VideoBot.exe
-                    if not exist "{new_exe}" (
-                        echo [%date% %time%] Ошибка: Новый VideoBot.exe не найден по пути {new_exe} >> update.log 2>&1
+                    if not exist "VideoBot.exe" (
+                        echo [%date% %time%] Ошибка: Новый VideoBot.exe не найден по пути VideoBot.exe >> update.log 2>&1
                         exit /b 1
                     )
-                    echo [%date% %time%] Новый VideoBot.exe найден по пути {new_exe} >> update.log 2>&1
+                    echo [%date% %time%] Новый VideoBot.exe найден по пути VideoBot.exe >> update.log 2>&1
+
+                    :: Проверка хэша нового VideoBot.exe
+                    echo [%date% %time%] Проверка хэша нового VideoBot.exe >> update.log 2>&1
+                    powershell -Command "(Get-FileHash -Path 'VideoBot.exe' -Algorithm SHA256).Hash.ToLower()" > temp_hash.txt 2>> update.log
+                    set /p new_hash=<temp_hash.txt
+                    del temp_hash.txt
+                    if "{new_exe_hash}"=="!new_hash!" (
+                        echo [%date% %time%] Хэш нового VideoBot.exe совпадает с ожидаемым: !new_hash! >> update.log 2>&1
+                    ) else (
+                        echo [%date% %time%] Ошибка: Хэш нового VideoBot.exe не совпадает. Ожидалось: {new_exe_hash}, получено: !new_hash! >> update.log 2>&1
+                        exit /b 1
+                    )
 
                     :: Обновление version.json
                     echo [%date% %time%] Обновление version.json >> update.log 2>&1
-                    echo {{"version": "{self.new_version}"}} > "{current_dir}\\version.json" 2>> update.log
+                    echo {{"version": "{self.new_version}"}} > "version.json" 2>> update.log
                     if %ERRORLEVEL% neq 0 (
                         echo [%date% %time%] Ошибка: Не удалось обновить version.json >> update.log 2>&1
                         exit /b 1
@@ -1295,8 +1305,8 @@ class AuthWindow(QMainWindow):
                     timeout /t 2 /nobreak >nul
 
                     :: Запуск новой версии
-                    echo [%date% %time%] Запуск новой версии {new_exe} >> update.log 2>&1
-                    start "" "{new_exe}" >> update.log 2>&1
+                    echo [%date% %time%] Запуск новой версии VideoBot.exe >> update.log 2>&1
+                    start "" "VideoBot.exe" >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
                         echo [%date% %time%] Ошибка: Не удалось запустить новую версию >> update.log 2>&1
                         exit /b 1
@@ -1322,8 +1332,8 @@ class AuthWindow(QMainWindow):
                     )
 
                     :: Удаление bat-файла
-                    echo [%date% %time%] Удаление скрипта обновления {bat_path} >> update.log 2>&1
-                    del "{bat_path}" >> update.log 2>&1
+                    echo [%date% %time%] Удаление скрипта обновления update.bat >> update.log 2>&1
+                    del "update.bat" >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
                         echo [%date% %time%] Предупреждение: Не удалось удалить скрипт обновления >> update.log 2>&1
                     )
@@ -1339,8 +1349,8 @@ class AuthWindow(QMainWindow):
                     echo [%date% %time%] Задержка перед началом распаковки завершена >> update.log 2>&1
 
                     :: Распаковка архива с помощью 7z.exe
-                    echo [%date% %time%] Распаковка архива {zip_path} в {current_dir} с помощью 7z.exe >> update.log 2>&1
-                    "{self._7z_path}" x "{zip_path}" -o"{current_dir}" -y >> update.log 2>&1
+                    echo [%date% %time%] Распаковка архива {zip_path} >> update.log 2>&1
+                    "{self._7z_path}" x "{zip_path}" -o"." -y >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
                         echo [%date% %time%] Ошибка: Не удалось распаковать архив с помощью 7z.exe >> update.log 2>&1
                         exit /b 1
@@ -1351,15 +1361,27 @@ class AuthWindow(QMainWindow):
                     timeout /t 2 /nobreak >nul
 
                     :: Проверка наличия нового VideoBot.exe
-                    if not exist "{new_exe}" (
-                        echo [%date% %time%] Ошибка: Новый VideoBot.exe не найден по пути {new_exe} >> update.log 2>&1
+                    if not exist "VideoBot.exe" (
+                        echo [%date% %time%] Ошибка: Новый VideoBot.exe не найден по пути VideoBot.exe >> update.log 2>&1
                         exit /b 1
                     )
-                    echo [%date% %time%] Новый VideoBot.exe найден по пути {new_exe} >> update.log 2>&1
+                    echo [%date% %time%] Новый VideoBot.exe найден по пути VideoBot.exe >> update.log 2>&1
+
+                    :: Проверка хэша нового VideoBot.exe
+                    echo [%date% %time%] Проверка хэша нового VideoBot.exe >> update.log 2>&1
+                    powershell -Command "(Get-FileHash -Path 'VideoBot.exe' -Algorithm SHA256).Hash.ToLower()" > temp_hash.txt 2>> update.log
+                    set /p new_hash=<temp_hash.txt
+                    del temp_hash.txt
+                    if "{new_exe_hash}"=="!new_hash!" (
+                        echo [%date% %time%] Хэш нового VideoBot.exe совпадает с ожидаемым: !new_hash! >> update.log 2>&1
+                    ) else (
+                        echo [%date% %time%] Ошибка: Хэш нового VideoBot.exe не совпадает. Ожидалось: {new_exe_hash}, получено: !new_hash! >> update.log 2>&1
+                        exit /b 1
+                    )
 
                     :: Обновление version.json
                     echo [%date% %time%] Обновление version.json >> update.log 2>&1
-                    echo {{"version": "{self.new_version}"}} > "{current_dir}\\version.json" 2>> update.log
+                    echo {{"version": "{self.new_version}"}} > "version.json" 2>> update.log
                     if %ERRORLEVEL% neq 0 (
                         echo [%date% %time%] Ошибка: Не удалось обновить version.json >> update.log 2>&1
                         exit /b 1
@@ -1370,8 +1392,8 @@ class AuthWindow(QMainWindow):
                     timeout /t 2 /nobreak >nul
 
                     :: Запуск новой версии
-                    echo [%date% %time%] Запуск новой версии {new_exe} >> update.log 2>&1
-                    start "" "{new_exe}" >> update.log 2>&1
+                    echo [%date% %time%] Запуск новой версии VideoBot.exe >> update.log 2>&1
+                    start "" "VideoBot.exe" >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
                         echo [%date% %time%] Ошибка: Не удалось запустить новую версию >> update.log 2>&1
                         exit /b 1
@@ -1397,8 +1419,8 @@ class AuthWindow(QMainWindow):
                     )
 
                     :: Удаление bat-файла
-                    echo [%date% %time%] Удаление скрипта обновления {bat_path} >> update.log 2>&1
-                    del "{bat_path}" >> update.log 2>&1
+                    echo [%date% %time%] Удаление скрипта обновления update.bat >> update.log 2>&1
+                    del "update.bat" >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
                         echo [%date% %time%] Предупреждение: Не удалось удалить скрипт обновления >> update.log 2>&1
                     )
@@ -1425,20 +1447,24 @@ class AuthWindow(QMainWindow):
                 finally:
                     state.client = None
 
-            # Запуск update.bat с правами администратора
+            # Запуск update.bat с правами администратора через subprocess.Popen
             logging.info("Запуск скрипта обновления с правами администратора")
-            result = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", f'/c "{bat_path}"', None, 1)
-            if result <= 32:
-                logging.error(f"Не удалось запустить update.bat с правами администратора, код ошибки: {result}")
+            try:
+                # Используем powershell для запуска с правами администратора
+                command = f'powershell -Command "Start-Process cmd -ArgumentList \'/c {bat_path}\' -WorkingDirectory \'{current_dir}\' -Verb RunAs"'
+                subprocess.Popen(command, shell=True)
+                logging.info("Скрипт обновления успешно запущен")
+            except Exception as e:
+                logging.error(f"Не удалось запустить update.bat: {str(e)}")
                 self.show_notification(
                     "Не удалось запустить скрипт обновления. Пожалуйста, запустите программу от имени администратора.",
                     "error"
                 )
                 return
 
-            # Задержка перед закрытием программы, чтобы дать update.bat время на запуск
-            logging.info("Ожидание перед закрытием программы (5 секунд)...")
-            time.sleep(5)
+            # Задержка перед закрытием программы (увеличиваем до 7 секунд)
+            logging.info("Ожидание перед закрытием программы (7 секунд)...")
+            time.sleep(7)
 
             # Закрываем приложение после запуска update.bat
             logging.info("Закрытие приложения")
@@ -1625,7 +1651,6 @@ class AuthWindow(QMainWindow):
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
                 zip_contents = zip_ref.namelist()
                 # Логируем содержимое архива для диагностики
-                logging.info(f"Содержимое архива: {zip_contents}")
                 for expected_file in expected_files:
                     # Проверяем, есть ли файл в архиве (включая подпапки)
                     found = any(expected_file == os.path.basename(f) for f in zip_contents)
