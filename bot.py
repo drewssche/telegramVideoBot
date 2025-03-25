@@ -1149,7 +1149,6 @@ class AuthWindow(QMainWindow):
 
         # Проверяем текущую директорию
         current_dir = os.getcwd()
-        logging.info(f"Текущая рабочая директория: {current_dir}")
         if not os.path.exists(os.path.join(current_dir, "version.json")):
             logging.error("Файл version.json не найден в текущей директории. Убедитесь, что программа запущена из правильной папки.")
             self.show_notification(
@@ -1168,22 +1167,12 @@ class AuthWindow(QMainWindow):
             self.show_notification(f"Нет прав на чтение архива: {zip_path}", "error")
             return
 
-        # Логируем хэш текущего VideoBot.exe (до обновления)
-        current_exe_path = os.path.join(current_dir, "VideoBot.exe")
-        if os.path.exists(current_exe_path):
-            try:
-                current_exe_hash = self.compute_file_hash(current_exe_path)
-                logging.info(f"Хэш текущего VideoBot.exe (до обновления): {current_exe_hash}")
-            except Exception as e:
-                logging.error(f"Не удалось вычислить хэш текущего VideoBot.exe: {str(e)}")
-
         # Проверяем содержимое архива и логируем хэш нового VideoBot.exe
         try:
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                zip_contents = zip_ref.namelist()
                 # Ищем VideoBot.exe в архиве
                 exe_in_zip = None
-                for f in zip_contents:
+                for f in zip_ref.namelist():
                     if os.path.basename(f) == "VideoBot.exe":
                         exe_in_zip = f
                         break
@@ -1206,14 +1195,6 @@ class AuthWindow(QMainWindow):
 
         try:
             bat_path = os.path.join(current_dir, "update.bat")
-            current_exe = sys.executable
-            new_exe = os.path.join(current_dir, "VideoBot.exe")  # Новый исполняемый файл в текущей директории
-
-            # Логируем пути для диагностики
-            logging.info(f"Путь к текущему исполняемому файлу: {current_exe}")
-            logging.info(f"Путь к новому исполняемому файлу: {new_exe}")
-            logging.info(f"Текущая директория: {current_dir}")
-            logging.info(f"Путь к update.bat: {bat_path}")
 
             # Проверяем права на запись для bat_path
             if not self.check_write_permissions():
@@ -1249,6 +1230,7 @@ class AuthWindow(QMainWindow):
             if not use_7z:
                 logging.warning("7z.exe не найден. Используем powershell для извлечения архива.")
                 bat_content = f"""@echo on
+                    chcp 65001 >nul
                     echo [%date% %time%] Начало выполнения update.bat >> update.log 2>&1
 
                     :: Задержка, чтобы убедиться, что программа полностью закрылась
@@ -1276,9 +1258,8 @@ class AuthWindow(QMainWindow):
 
                     :: Проверка хэша нового VideoBot.exe
                     echo [%date% %time%] Проверка хэша нового VideoBot.exe >> update.log 2>&1
-                    powershell -Command "(Get-FileHash -Path 'VideoBot.exe' -Algorithm SHA256).Hash.ToLower()" > temp_hash.txt 2>> update.log
-                    set /p new_hash=<temp_hash.txt
-                    del temp_hash.txt
+                    for /f "delims=" %%i in ('powershell -Command "(Get-FileHash -Path ''VideoBot.exe'' -Algorithm SHA256).Hash.ToLower()"') do set "new_hash=%%i"
+                    echo [%date% %time%] Вычисленный хэш: !new_hash! >> update.log 2>&1
                     if "{new_exe_hash}"=="!new_hash!" (
                         echo [%date% %time%] Хэш нового VideoBot.exe совпадает с ожидаемым: !new_hash! >> update.log 2>&1
                     ) else (
@@ -1336,6 +1317,7 @@ class AuthWindow(QMainWindow):
             else:
                 # Используем 7z.exe для извлечения архива
                 bat_content = f"""@echo on
+                    chcp 65001 >nul
                     echo [%date% %time%] Начало выполнения update.bat >> update.log 2>&1
 
                     :: Задержка, чтобы убедиться, что программа полностью закрылась
@@ -1363,9 +1345,8 @@ class AuthWindow(QMainWindow):
 
                     :: Проверка хэша нового VideoBot.exe
                     echo [%date% %time%] Проверка хэша нового VideoBot.exe >> update.log 2>&1
-                    powershell -Command "(Get-FileHash -Path 'VideoBot.exe' -Algorithm SHA256).Hash.ToLower()" > temp_hash.txt 2>> update.log
-                    set /p new_hash=<temp_hash.txt
-                    del temp_hash.txt
+                    for /f "delims=" %%i in ('powershell -Command "(Get-FileHash -Path ''VideoBot.exe'' -Algorithm SHA256).Hash.ToLower()"') do set "new_hash=%%i"
+                    echo [%date% %time%] Вычисленный хэш: !new_hash! >> update.log 2>&1
                     if "{new_exe_hash}"=="!new_hash!" (
                         echo [%date% %time%] Хэш нового VideoBot.exe совпадает с ожидаемым: !new_hash! >> update.log 2>&1
                     ) else (
@@ -1441,12 +1422,12 @@ class AuthWindow(QMainWindow):
                 finally:
                     state.client = None
 
-            # Запуск update.bat с правами администратора через subprocess.Popen
+            # Запуск update.bat с правами администратора через powershell с использованием start
             logging.info("Запуск скрипта обновления с правами администратора")
             try:
-                # Используем powershell для запуска с правами администратора
-                command = f'powershell -Command "Start-Process cmd -ArgumentList \'/c {bat_path}\' -WorkingDirectory \'{current_dir}\' -Verb RunAs"'
-                subprocess.Popen(command, shell=True)
+                # Используем powershell с командой start, чтобы процесс был независимым
+                command = f'powershell -Command "Start-Process -FilePath cmd.exe -ArgumentList \'/c {bat_path}\' -WorkingDirectory \'{current_dir}\' -Verb RunAs -WindowStyle Hidden"'
+                os.system(command)
                 logging.info("Скрипт обновления успешно запущен")
             except Exception as e:
                 logging.error(f"Не удалось запустить update.bat: {str(e)}")
@@ -1456,7 +1437,7 @@ class AuthWindow(QMainWindow):
                 )
                 return
 
-            # Задержка перед закрытием программы (увеличиваем до 7 секунд)
+            # Задержка перед закрытием программы (5 секунд, как в твоей версии)
             logging.info("Ожидание перед закрытием программы (5 секунд)...")
             time.sleep(5)
 
