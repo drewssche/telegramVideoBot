@@ -36,12 +36,6 @@ logging.basicConfig(
     filemode='a'
 )
 
-# Маркер версии кода
-CODE_VERSION = "5.0.2"  # Обновляй это значение при каждом изменении кода
-
-# Логируем версию кода при запуске
-logging.info(f"Запуск VideoBot с версией кода: {CODE_VERSION}")
-
 # Устанавливаем QT_PLUGIN_PATH
 if getattr(sys, 'frozen', False):  # Проверяем, что приложение заморожено (собрано cx_Freeze)
     base_path = os.path.dirname(sys.executable)
