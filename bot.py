@@ -1225,6 +1225,16 @@ class AuthWindow(QMainWindow):
                     chcp 65001 >nul
                     echo [%date% %time%] Начало выполнения update.bat >> update.log 2>&1
 
+                    :: Создаём временный файл для подтверждения запуска
+                    echo Update script started > update_started.txt
+
+                    :: Принудительное завершение VideoBot.exe
+                    echo [%date% %time%] Завершение процесса VideoBot.exe >> update.log 2>&1
+                    taskkill /F /IM VideoBot.exe >> update.log 2>&1
+                    if %ERRORLEVEL% neq 0 (
+                        echo [%date% %time%] Предупреждение: Не удалось завершить процесс VideoBot.exe >> update.log 2>&1
+                    )
+
                     :: Задержка, чтобы убедиться, что программа полностью закрылась
                     timeout /t 2 /nobreak >nul
                     echo [%date% %time%] Задержка перед началом распаковки завершена >> update.log 2>&1
@@ -1296,6 +1306,16 @@ class AuthWindow(QMainWindow):
                 bat_content = f"""@echo off
                     chcp 65001 >nul
                     echo [%date% %time%] Начало выполнения update.bat >> update.log 2>&1
+
+                    :: Создаём временный файл для подтверждения запуска
+                    echo Update script started > update_started.txt
+
+                    :: Принудительное завершение VideoBot.exe
+                    echo [%date% %time%] Завершение процесса VideoBot.exe >> update.log 2>&1
+                    taskkill /F /IM VideoBot.exe >> update.log 2>&1
+                    if %ERRORLEVEL% neq 0 (
+                        echo [%date% %time%] Предупреждение: Не удалось завершить процесс VideoBot.exe >> update.log 2>&1
+                    )
 
                     :: Задержка, чтобы убедиться, что программа полностью закрылась
                     timeout /t 2 /nobreak >nul
@@ -1384,16 +1404,27 @@ class AuthWindow(QMainWindow):
                 finally:
                     state.client = None
 
-            # Запуск update.bat через Планировщик задач (schtasks)
-            logging.info("Запуск скрипта обновления через Планировщик задач с правами администратора")
+            # Запуск update.bat через Планировщик задач с задержкой в 3 секунды
+            logging.info("Запуск скрипта обновления через Планировщик задач с правами администратора (с задержкой в 3 секунды)")
             try:
-                # Создаём задачу в Планировщике задач
+                # Получаем текущее время и добавляем 3 секунды
+                from datetime import datetime, timedelta
+                now = datetime.now()
+                start_time = now + timedelta(seconds=3)
+                start_date = start_time.strftime("%Y-%m-%d")  # Формат: YYYY-MM-DD
+                start_time_str = start_time.strftime("%H:%M:%S")  # Формат: HH:MM:SS
+
+                # Создаём задачу в Планировщике задач с указанием времени начала
                 task_name = "RunUpdateBat"
-                create_command = f'schtasks /create /tn "{task_name}" /tr "cmd.exe /c \\"{bat_path}\\"" /sc once /st 00:00 /ru "System" /rl HIGHEST /f'
+                create_command = (
+                    f'schtasks /create /tn "{task_name}" /tr "cmd.exe /c \\"{bat_path}\\"" '
+                    f'/sc once /sd {start_date} /st {start_time_str} /ru "System" /rl HIGHEST /f'
+                )
                 run_command = f'schtasks /run /tn "{task_name}"'
                 delete_command = f'schtasks /delete /tn "{task_name}" /f'
 
                 # Создаём задачу
+                logging.info(f"Создание задачи в Планировщике задач: {create_command}")
                 create_result = os.system(create_command)
                 if create_result != 0:
                     logging.error(f"Не удалось создать задачу в Планировщике задач: {create_result}")
@@ -1404,6 +1435,7 @@ class AuthWindow(QMainWindow):
                     return
 
                 # Запускаем задачу
+                logging.info(f"Запуск задачи: {run_command}")
                 run_result = os.system(run_command)
                 if run_result != 0:
                     logging.error(f"Не удалось запустить задачу в Планировщике задач: {run_result}")
@@ -1416,11 +1448,12 @@ class AuthWindow(QMainWindow):
                     return
 
                 # Удаляем задачу после запуска
+                logging.info(f"Удаление задачи: {delete_command}")
                 delete_result = os.system(delete_command)
                 if delete_result != 0:
                     logging.warning(f"Не удалось удалить задачу из Планировщика задач: {delete_result}")
 
-                logging.info("Скрипт обновления успешно запущен через Планировщик задач")
+                logging.info("Скрипт обновления успешно запланирован через Планировщик задач")
             except Exception as e:
                 logging.error(f"Не удалось запустить update.bat через Планировщик задач: {str(e)}")
                 self.show_notification(
