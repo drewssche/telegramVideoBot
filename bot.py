@@ -1128,6 +1128,13 @@ class AuthWindow(QMainWindow):
         progress.canceled.connect(self.download_thread.terminate)
 
     def on_download_finished(self, success, error, progress, zip_path):
+        # Функция проверки прав администратора
+        def is_admin():
+            try:
+                return ctypes.windll.shell32.IsUserAnAdmin()
+            except:
+                return False
+
         progress.close()
         if not success:
             logging.error(f"Ошибка скачивания: {error}")
@@ -1135,6 +1142,15 @@ class AuthWindow(QMainWindow):
             if os.path.exists(zip_path):
                 logging.info(f"Удаление архива после ошибки скачивания: {zip_path}")
                 os.remove(zip_path)
+            return
+
+        # Проверяем, запущена ли программа с правами администратора
+        if not is_admin():
+            logging.error("Программа не запущена с правами администратора")
+            self.show_notification(
+                "Программа должна быть запущена от имени администратора для выполнения обновления.",
+                "error"
+            )
             return
 
         # Добавляем задержку, чтобы дать системе время обработать файл
@@ -1235,8 +1251,8 @@ class AuthWindow(QMainWindow):
                         echo [%date% %time%] Предупреждение: Не удалось завершить процесс VideoBot.exe >> update.log 2>&1
                     )
 
-                    :: Задержка, чтобы убедиться, что программа полностью закрылась
-                    timeout /t 2 /nobreak >nul
+                    :: Задержка 3 секунды перед началом обновления
+                    timeout /t 3 /nobreak >nul
                     echo [%date% %time%] Задержка перед началом распаковки завершена >> update.log 2>&1
 
                     :: Проверка текущей директории
@@ -1317,8 +1333,8 @@ class AuthWindow(QMainWindow):
                         echo [%date% %time%] Предупреждение: Не удалось завершить процесс VideoBot.exe >> update.log 2>&1
                     )
 
-                    :: Задержка, чтобы убедиться, что программа полностью закрылась
-                    timeout /t 2 /nobreak >nul
+                    :: Задержка 3 секунды перед началом обновления
+                    timeout /t 3 /nobreak >nul
                     echo [%date% %time%] Задержка перед началом распаковки завершена >> update.log 2>&1
 
                     :: Проверка текущей директории
@@ -1404,60 +1420,79 @@ class AuthWindow(QMainWindow):
                 finally:
                     state.client = None
 
-            # Запуск update.bat через Планировщик задач с задержкой в 3 секунды
-            logging.info("Запуск скрипта обновления через Планировщик задач с правами администратора (с задержкой в 3 секунды)")
+            # Проверяем состояние службы Планировщика задач
+            logging.info("Проверка состояния службы Планировщика задач")
             try:
-                # Получаем текущее время и добавляем 3 секунды
-                from datetime import datetime, timedelta
-                now = datetime.now()
-                start_time = now + timedelta(seconds=3)
-                start_date = start_time.strftime("%Y-%m-%d")  # Формат: YYYY-MM-DD
-                start_time_str = start_time.strftime("%H:%M:%S")  # Формат: HH:MM:SS
+                result = subprocess.run('sc query Schedule', capture_output=True, text=True, shell=True)
+                logging.info(f"Состояние службы Планировщика задач: {result.stdout}")
+                if result.returncode != 0:
+                    logging.error(f"Ошибка при проверке службы Планировщика задач: {result.stderr}")
+                    self.show_notification(
+                        "Не удалось проверить состояние службы Планировщика задач. Убедитесь, что служба запущена.",
+                        "error"
+                    )
+                    return
+            except Exception as e:
+                logging.error(f"Не удалось проверить состояние службы Планировщика задач: {str(e)}")
+                self.show_notification(
+                    "Не удалось проверить состояние службы Планировщика задач. Убедитесь, что служба запущена.",
+                    "error"
+                )
+                return
 
-                # Создаём задачу в Планировщике задач с указанием времени начала
+            # Запуск update.bat через Планировщик задач
+            logging.info("Запуск скрипта обновления через Планировщик задач с правами администратора")
+            try:
+                # Создаём задачу в Планировщике задач (без параметров /sd и /st)
                 task_name = "RunUpdateBat"
                 create_command = (
                     f'schtasks /create /tn "{task_name}" /tr "cmd.exe /c \\"{bat_path}\\"" '
-                    f'/sc once /sd {start_date} /st {start_time_str} /ru "System" /rl HIGHEST /f'
+                    f'/sc once /ru "System" /rl HIGHEST /f'
                 )
                 run_command = f'schtasks /run /tn "{task_name}"'
                 delete_command = f'schtasks /delete /tn "{task_name}" /f'
 
                 # Создаём задачу
                 logging.info(f"Создание задачи в Планировщике задач: {create_command}")
-                create_result = os.system(create_command)
-                if create_result != 0:
-                    logging.error(f"Не удалось создать задачу в Планировщике задач: {create_result}")
+                result = subprocess.run(create_command, shell=True, capture_output=True, text=True)
+                if result.returncode != 0:
+                    logging.error(f"Не удалось создать задачу в Планировщике задач: {result.returncode}")
+                    logging.error(f"Вывод команды: {result.stdout}")
+                    logging.error(f"Ошибка команды: {result.stderr}")
                     self.show_notification(
-                        "Не удалось создать задачу для обновления. Пожалуйста, запустите программу от имени администратора.",
+                        f"Не удалось создать задачу для обновления. Ошибка: {result.stderr}",
                         "error"
                     )
                     return
 
                 # Запускаем задачу
                 logging.info(f"Запуск задачи: {run_command}")
-                run_result = os.system(run_command)
-                if run_result != 0:
-                    logging.error(f"Не удалось запустить задачу в Планировщике задач: {run_result}")
+                run_result = subprocess.run(run_command, shell=True, capture_output=True, text=True)
+                if run_result.returncode != 0:
+                    logging.error(f"Не удалось запустить задачу в Планировщике задач: {run_result.returncode}")
+                    logging.error(f"Вывод команды: {run_result.stdout}")
+                    logging.error(f"Ошибка команды: {run_result.stderr}")
                     self.show_notification(
-                        "Не удалось запустить задачу для обновления. Пожалуйста, проверьте права доступа.",
+                        f"Не удалось запустить задачу для обновления. Ошибка: {run_result.stderr}",
                         "error"
                     )
                     # Удаляем задачу в случае ошибки
-                    os.system(delete_command)
+                    subprocess.run(delete_command, shell=True)
                     return
 
                 # Удаляем задачу после запуска
                 logging.info(f"Удаление задачи: {delete_command}")
-                delete_result = os.system(delete_command)
-                if delete_result != 0:
-                    logging.warning(f"Не удалось удалить задачу из Планировщика задач: {delete_result}")
+                delete_result = subprocess.run(delete_command, shell=True, capture_output=True, text=True)
+                if delete_result.returncode != 0:
+                    logging.warning(f"Не удалось удалить задачу из Планировщика задач: {delete_result.returncode}")
+                    logging.warning(f"Вывод команды: {delete_result.stdout}")
+                    logging.warning(f"Ошибка команды: {delete_result.stderr}")
 
                 logging.info("Скрипт обновления успешно запланирован через Планировщик задач")
             except Exception as e:
                 logging.error(f"Не удалось запустить update.bat через Планировщик задач: {str(e)}")
                 self.show_notification(
-                    "Не удалось запустить скрипт обновления. Пожалуйста, запустите программу от имени администратора.",
+                    "Не удалось запустить скрипт обновления. Пожалуйста, проверьте права доступа и состояние Планировщика задач.",
                     "error"
                 )
                 return
