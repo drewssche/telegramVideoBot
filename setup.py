@@ -81,7 +81,9 @@ for plugin in necessary_plugins:
 qt_dlls = ["Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll"]
 qt_dll_includes = []
 for dll in qt_dlls:
-    dll_path = os.path.join(pyside6_path, "Qt", "bin", dll)
+    dll_path = os.path.join(pyside6_path, dll)  # Проверяем корень PySide6
+    if not os.path.exists(dll_path):
+        dll_path = os.path.join(pyside6_path, "Qt", "bin", dll)  # Проверяем Qt/bin
     if os.path.exists(dll_path):
         qt_dll_includes.append((dll_path, dll))
     else:
@@ -92,6 +94,9 @@ mingw_dlls = ["libstdc++-6.dll", "libgcc_s_seh-1.dll", "libwinpthread-1.dll"]
 qt_system_dll_includes = []
 for dll in mingw_dlls:
     dll_path = os.path.join(pyside6_path, dll)
+    if not os.path.exists(dll_path):
+        # Пробуем найти в системных путях или рядом с Python
+        dll_path = os.path.join(os.path.dirname(sys.executable), dll)
     if os.path.exists(dll_path):
         qt_system_dll_includes.append((dll_path, dll))
     else:
@@ -108,7 +113,8 @@ full_build_options = {
         ("temp-files", "temp-files"),
         ("icons", "icons"),
     ] + qt_plugins_includes + qt_dll_includes + qt_system_dll_includes,
-    "build_exe": "VideoBot"
+    "build_exe": "VideoBot",
+    "replace_paths": []  # Отключаем кэширование путей
 }
 
 # Инкрементальный релиз
@@ -121,21 +127,19 @@ incremental_build_options = {
         ("help_content.json", "help_content.json"),
         ("icons", "icons"),
     ] + qt_plugins_includes + qt_dll_includes + qt_system_dll_includes,
-    "build_exe": "VideoBot"
+    "build_exe": "VideoBot",
+    "replace_paths": []  # Отключаем кэширование путей
 }
 
 # Определяем тип сборки из переменной окружения
 build_type = os.getenv("BUILD_TYPE", "full")
 build_options = full_build_options if build_type == "full" else incremental_build_options
 
-# Настройка с отключением кэширования
+# Настройка
 setup(
     name="VideoBot",
     version=version,
     description="Telegram Video Bot",
-    options={
-        "build_exe": build_options,
-        "build": {"build_exe": "VideoBot", "replace_paths": []}  # Отключаем кэширование путей
-    },
+    options={"build_exe": build_options},  # Все опции для build_exe здесь
     executables=executables
 )
