@@ -121,7 +121,10 @@ jobs:
           REM Логируем размер файла и содержимое папки
           dir VideoBot\VideoBot.exe
           dir VideoBot
-          7z a -tzip dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip VideoBot\*
+          REM Переходим в папку VideoBot и архивируем её содержимое без самой папки
+          cd VideoBot
+          7z a -tzip ..\dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip *
+          cd ..
           REM Проверяем содержимое архива
           7z l dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip
         shell: cmd
