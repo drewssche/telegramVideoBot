@@ -1133,6 +1133,12 @@ class AuthWindow(QMainWindow):
             )
             return
 
+        # Логируем информацию об обновлении
+        logging.info(f"Начало обновления до версии {self.new_version}")
+        logging.info(f"URL для скачивания: {self.download_url}")
+        logging.info(f"Ожидаемый хэш: {self.download_hash}")
+        logging.info(f"Тип обновления: {'Полное' if self.is_full_update else 'Инкрементальное'}")
+
         # Создаём прогресс-бар
         progress = QProgressDialog("Скачивание обновления...", "Отмена", 0, 100, self)
         progress.setWindowTitle("Обновление")
@@ -1264,7 +1270,7 @@ class AuthWindow(QMainWindow):
                 return
 
             # Создаём update.bat
-            bat_content = f"""@echo off
+            bat_content = f"""@echo on
                 echo %date% %time% - Начало выполнения update.bat >> update.log 2>&1
 
                 :: Распаковка архива в текущую директорию
@@ -1339,15 +1345,6 @@ class AuthWindow(QMainWindow):
                 finally:
                     state.client = None
 
-            # Закрываем приложение перед запуском update.bat
-            logging.info("Закрытие приложения")
-            self.close()  # Закрываем текущее окно
-            QApplication.quit()
-            # Даём время на завершение процесса
-            time.sleep(1)
-            logging.info("Принудительное завершение программы")
-            sys.exit(0)
-
             # Запуск update.bat с правами администратора
             logging.info("Запуск скрипта обновления с правами администратора")
             result = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", f'/c "{bat_path}"', None, 1)
@@ -1358,6 +1355,13 @@ class AuthWindow(QMainWindow):
                     "error"
                 )
                 return
+
+            # Закрываем приложение после запуска update.bat
+            logging.info("Закрытие приложения")
+            self.close()  # Закрываем текущее окно
+            QApplication.quit()
+            logging.info("Принудительное завершение программы")
+            sys.exit(0)
 
         except Exception as e:
             logging.error(f"Ошибка при выполнении обновления: {str(e)}")
