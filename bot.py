@@ -1226,8 +1226,11 @@ class AuthWindow(QMainWindow):
                     echo [%date% %time%] Начало выполнения update.bat >> update.log 2>&1
 
                     :: Задержка, чтобы убедиться, что программа полностью закрылась
-                    timeout /t 5 /nobreak >nul
+                    timeout /t 2 /nobreak >nul
                     echo [%date% %time%] Задержка перед началом распаковки завершена >> update.log 2>&1
+
+                    :: Проверка текущей директории
+                    echo [%date% %time%] Текущая директория: %CD% >> update.log 2>&1
 
                     :: Распаковка архива в текущую директорию
                     echo [%date% %time%] Распаковка архива {zip_path} >> update.log 2>&1
@@ -1295,8 +1298,11 @@ class AuthWindow(QMainWindow):
                     echo [%date% %time%] Начало выполнения update.bat >> update.log 2>&1
 
                     :: Задержка, чтобы убедиться, что программа полностью закрылась
-                    timeout /t 5 /nobreak >nul
+                    timeout /t 2 /nobreak >nul
                     echo [%date% %time%] Задержка перед началом распаковки завершена >> update.log 2>&1
+
+                    :: Проверка текущей директории
+                    echo [%date% %time%] Текущая директория: %CD% >> update.log 2>&1
 
                     :: Распаковка архива с помощью 7z.exe
                     echo [%date% %time%] Распаковка архива {zip_path} >> update.log 2>&1
@@ -1423,7 +1429,7 @@ class AuthWindow(QMainWindow):
                 )
                 return
 
-            # Закрываем приложение после запуска update.bat
+            # Закрываем приложение сразу после запуска update.bat
             logging.info("Закрытие приложения")
             self.close()  # Закрываем текущее окно
             QApplication.quit()
