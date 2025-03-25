@@ -1150,10 +1150,6 @@ class AuthWindow(QMainWindow):
         # Валидация архива
         if not self.validate_archive(zip_path, self.download_hash):
             logging.error("Валидация архива не пройдена")
-            # Временно не удаляем архив, чтобы можно было проверить его содержимое
-            # if os.path.exists(zip_path):
-            #     logging.info(f"Удаление архива после ошибки валидации: {zip_path}")
-            #     os.remove(zip_path)
             return
 
         # Проверяем текущую директорию
@@ -1200,10 +1196,6 @@ class AuthWindow(QMainWindow):
                 if not exe_in_zip:
                     logging.error("Архив не содержит VideoBot.exe")
                     self.show_notification("Архив не содержит VideoBot.exe. Обновление невозможно.", "error")
-                    # Временно не удаляем архив
-                    # if os.path.exists(zip_path):
-                    #     logging.info(f"Удаление архива после ошибки проверки содержимого: {zip_path}")
-                    #     os.remove(zip_path)
                     return
                 # Извлекаем VideoBot.exe во временную папку, чтобы вычислить его хэш
                 temp_exe_path = os.path.join(current_dir, "temp", "VideoBot_temp.exe")
@@ -1216,10 +1208,6 @@ class AuthWindow(QMainWindow):
         except zipfile.BadZipFile as e:
             logging.error(f"Не удалось проверить содержимое архива: {str(e)}")
             self.show_notification(f"Не удалось проверить содержимое архива: {str(e)}.", "error")
-            # Временно не удаляем архив
-            # if os.path.exists(zip_path):
-            #     logging.info(f"Удаление архива после ошибки проверки содержимого: {zip_path}")
-            #     os.remove(zip_path)
             return
 
         try:
@@ -1242,62 +1230,181 @@ class AuthWindow(QMainWindow):
                 )
                 return
 
-            # Создаём update.bat
-            bat_content = f"""@echo on
-                echo %date% %time% - Начало выполнения update.bat >> update.log 2>&1
+            # Проверяем наличие 7z.exe
+            use_7z = False
+            possible_7z_paths = [
+                "C:\\Program Files\\7-Zip\\7z.exe",   # Сначала проверяем твой путь
+                "C:\\Program Files (x86)\\7-Zip\\7z.exe",  # Для 32-битной версии на 64-битной системе
+                os.path.join(os.getcwd(), "7z.exe"),  # Проверяем в текущей директории (если ты решишь скопировать)
+            ]
 
-                :: Распаковка архива в текущую директорию
-                echo %date% %time% - Распаковка архива {zip_path} >> update.log 2>&1
-                powershell -Command "Expand-Archive -Path '{zip_path}' -DestinationPath '{current_dir}' -Force" >> update.log 2>&1
-                if errorlevel 1 (
-                    echo %date% %time% - Не удалось распаковать архив >> update.log 2>&1
-                    exit /b 1
-                )
-                echo %date% %time% - Архив успешно распакован >> update.log 2>&1
+            for path in possible_7z_paths:
+                if os.path.exists(path):
+                    try:
+                        # Проверяем, что 7z.exe работает, вызвав его с параметром --help
+                        result = subprocess.run([path, "--help"], capture_output=True, text=True)
+                        if result.returncode == 0:
+                            logging.info(f"7z.exe найден по пути: {path}")
+                            use_7z = True
+                            self._7z_path = path  # Сохраняем путь к 7z.exe
+                            break
+                    except Exception as e:
+                        logging.warning(f"Не удалось проверить 7z.exe по пути {path}: {str(e)}")
+                else:
+                    logging.debug(f"7z.exe не найден по пути: {path}")
 
-                :: Проверка наличия нового VideoBot.exe
-                if not exist "{new_exe}" (
-                    echo %date% %time% - Новый VideoBot.exe не найден по пути {new_exe} >> update.log 2>&1
-                    exit /b 1
-                )
-                echo %date% %time% - Новый VideoBot.exe найден по пути {new_exe} >> update.log 2>&1
+            if not use_7z:
+                logging.warning("7z.exe не найден. Используем powershell для извлечения архива.")
+                # Запасной вариант с powershell
+                bat_content = f"""@echo off
+                    echo [%date% %time%] Начало выполнения update.bat >> update.log 2>&1
 
-                :: Обновление version.json
-                echo %date% %time% - Обновление version.json >> update.log 2>&1
-                echo {{"version": "{self.new_version}"}} > "{current_dir}\\version.json" 2>> update.log
-                if errorlevel 1 (
-                    echo %date% %time% - Не удалось обновить version.json >> update.log 2>&1
-                    exit /b 1
-                )
-                echo %date% %time% - Файл version.json обновлён >> update.log 2>&1
+                    :: Задержка, чтобы убедиться, что программа полностью закрылась
+                    timeout /t 5 /nobreak >nul
+                    echo [%date% %time%] Задержка перед началом распаковки завершена >> update.log 2>&1
 
-                :: Удаление временных файлов
-                echo %date% %time% - Удаление архива {zip_path} >> update.log 2>&1
-                del "{zip_path}" >> update.log 2>&1
-                if errorlevel 1 (
-                    echo %date% %time% - Не удалось удалить архив >> update.log 2>&1
-                    exit /b 1
-                )
-                echo %date% %time% - Архив удалён >> update.log 2>&1
+                    :: Распаковка архива в текущую директорию
+                    echo [%date% %time%] Распаковка архива {zip_path} в {current_dir} >> update.log 2>&1
+                    powershell -Command "Expand-Archive -Path '{zip_path}' -DestinationPath '{current_dir}' -Force" >> update.log 2>&1
+                    if %ERRORLEVEL% neq 0 (
+                        echo [%date% %time%] Ошибка: Не удалось распаковать архив >> update.log 2>&1
+                        exit /b 1
+                    )
+                    echo [%date% %time%] Архив успешно распакован >> update.log 2>&1
 
-                :: Запуск новой версии
-                echo %date% %time% - Запуск новой версии {new_exe} >> update.log 2>&1
-                start "" "{new_exe}" >> update.log 2>&1
-                if errorlevel 1 (
-                    echo %date% %time% - Не удалось запустить новую версию >> update.log 2>&1
-                    exit /b 1
-                )
-                echo %date% %time% - Новая версия запущена >> update.log 2>&1
+                    :: Задержка после распаковки
+                    timeout /t 2 /nobreak >nul
 
-                :: Удаление bat-файла
-                echo %date% %time% - Удаление скрипта обновления {bat_path} >> update.log 2>&1
-                del "{bat_path}" >> update.log 2>&1
-                if errorlevel 1 (
-                    echo %date% %time% - Не удалось удалить скрипт обновления >> update.log 2>&1
-                    exit /b 1
-                )
-                echo %date% %time% - Скрипт обновления удалён >> update.log 2>&1
-                """
+                    :: Проверка наличия нового VideoBot.exe
+                    if not exist "{new_exe}" (
+                        echo [%date% %time%] Ошибка: Новый VideoBot.exe не найден по пути {new_exe} >> update.log 2>&1
+                        exit /b 1
+                    )
+                    echo [%date% %time%] Новый VideoBot.exe найден по пути {new_exe} >> update.log 2>&1
+
+                    :: Обновление version.json
+                    echo [%date% %time%] Обновление version.json >> update.log 2>&1
+                    echo {{"version": "{self.new_version}"}} > "{current_dir}\\version.json" 2>> update.log
+                    if %ERRORLEVEL% neq 0 (
+                        echo [%date% %time%] Ошибка: Не удалось обновить version.json >> update.log 2>&1
+                        exit /b 1
+                    )
+                    echo [%date% %time%] Файл version.json обновлён >> update.log 2>&1
+
+                    :: Задержка перед запуском новой версии
+                    timeout /t 2 /nobreak >nul
+
+                    :: Запуск новой версии
+                    echo [%date% %time%] Запуск новой версии {new_exe} >> update.log 2>&1
+                    start "" "{new_exe}" >> update.log 2>&1
+                    if %ERRORLEVEL% neq 0 (
+                        echo [%date% %time%] Ошибка: Не удалось запустить новую версию >> update.log 2>&1
+                        exit /b 1
+                    )
+                    echo [%date% %time%] Новая версия запущена >> update.log 2>&1
+
+                    :: Задержка перед удалением файлов
+                    timeout /t 2 /nobreak >nul
+
+                    :: Удаление архива
+                    echo [%date% %time%] Удаление архива {zip_path} >> update.log 2>&1
+                    del "{zip_path}" >> update.log 2>&1
+                    if %ERRORLEVEL% neq 0 (
+                        echo [%date% %time%] Предупреждение: Не удалось удалить архив >> update.log 2>&1
+                    )
+                    echo [%date% %time%] Архив удалён >> update.log 2>&1
+
+                    :: Удаление временной папки temp, если она пуста
+                    echo [%date% %time%] Удаление папки temp, если она пуста >> update.log 2>&1
+                    rmdir "temp" >> update.log 2>&1
+                    if %ERRORLEVEL% neq 0 (
+                        echo [%date% %time%] Предупреждение: Не удалось удалить папку temp (возможно, она не пуста) >> update.log 2>&1
+                    )
+
+                    :: Удаление bat-файла
+                    echo [%date% %time%] Удаление скрипта обновления {bat_path} >> update.log 2>&1
+                    del "{bat_path}" >> update.log 2>&1
+                    if %ERRORLEVEL% neq 0 (
+                        echo [%date% %time%] Предупреждение: Не удалось удалить скрипт обновления >> update.log 2>&1
+                    )
+                    echo [%date% %time%] Скрипт обновления удалён >> update.log 2>&1
+                    """
+            else:
+                # Используем 7z.exe для извлечения архива
+                bat_content = f"""@echo off
+                    echo [%date% %time%] Начало выполнения update.bat >> update.log 2>&1
+
+                    :: Задержка, чтобы убедиться, что программа полностью закрылась
+                    timeout /t 5 /nobreak >nul
+                    echo [%date% %time%] Задержка перед началом распаковки завершена >> update.log 2>&1
+
+                    :: Распаковка архива с помощью 7z.exe
+                    echo [%date% %time%] Распаковка архива {zip_path} в {current_dir} с помощью 7z.exe >> update.log 2>&1
+                    "{self._7z_path}" x "{zip_path}" -o"{current_dir}" -y >> update.log 2>&1
+                    if %ERRORLEVEL% neq 0 (
+                        echo [%date% %time%] Ошибка: Не удалось распаковать архив с помощью 7z.exe >> update.log 2>&1
+                        exit /b 1
+                    )
+                    echo [%date% %time%] Архив успешно распакован >> update.log 2>&1
+
+                    :: Задержка после распаковки
+                    timeout /t 2 /nobreak >nul
+
+                    :: Проверка наличия нового VideoBot.exe
+                    if not exist "{new_exe}" (
+                        echo [%date% %time%] Ошибка: Новый VideoBot.exe не найден по пути {new_exe} >> update.log 2>&1
+                        exit /b 1
+                    )
+                    echo [%date% %time%] Новый VideoBot.exe найден по пути {new_exe} >> update.log 2>&1
+
+                    :: Обновление version.json
+                    echo [%date% %time%] Обновление version.json >> update.log 2>&1
+                    echo {{"version": "{self.new_version}"}} > "{current_dir}\\version.json" 2>> update.log
+                    if %ERRORLEVEL% neq 0 (
+                        echo [%date% %time%] Ошибка: Не удалось обновить version.json >> update.log 2>&1
+                        exit /b 1
+                    )
+                    echo [%date% %time%] Файл version.json обновлён >> update.log 2>&1
+
+                    :: Задержка перед запуском новой версии
+                    timeout /t 2 /nobreak >nul
+
+                    :: Запуск новой версии
+                    echo [%date% %time%] Запуск новой версии {new_exe} >> update.log 2>&1
+                    start "" "{new_exe}" >> update.log 2>&1
+                    if %ERRORLEVEL% neq 0 (
+                        echo [%date% %time%] Ошибка: Не удалось запустить новую версию >> update.log 2>&1
+                        exit /b 1
+                    )
+                    echo [%date% %time%] Новая версия запущена >> update.log 2>&1
+
+                    :: Задержка перед удалением файлов
+                    timeout /t 2 /nobreak >nul
+
+                    :: Удаление архива
+                    echo [%date% %time%] Удаление архива {zip_path} >> update.log 2>&1
+                    del "{zip_path}" >> update.log 2>&1
+                    if %ERRORLEVEL% neq 0 (
+                        echo [%date% %time%] Предупреждение: Не удалось удалить архив >> update.log 2>&1
+                    )
+                    echo [%date% %time%] Архив удалён >> update.log 2>&1
+
+                    :: Удаление временной папки temp, если она пуста
+                    echo [%date% %time%] Удаление папки temp, если она пуста >> update.log 2>&1
+                    rmdir "temp" >> update.log 2>&1
+                    if %ERRORLEVEL% neq 0 (
+                        echo [%date% %time%] Предупреждение: Не удалось удалить папку temp (возможно, она не пуста) >> update.log 2>&1
+                    )
+
+                    :: Удаление bat-файла
+                    echo [%date% %time%] Удаление скрипта обновления {bat_path} >> update.log 2>&1
+                    del "{bat_path}" >> update.log 2>&1
+                    if %ERRORLEVEL% neq 0 (
+                        echo [%date% %time%] Предупреждение: Не удалось удалить скрипт обновления >> update.log 2>&1
+                    )
+                    echo [%date% %time%] Скрипт обновления удалён >> update.log 2>&1
+                    """
+
             logging.info(f"Создание скрипта обновления: {bat_path}")
             with open(bat_path, "w", encoding="utf-8") as bat_file:
                 bat_file.write(bat_content)
@@ -1328,6 +1435,10 @@ class AuthWindow(QMainWindow):
                     "error"
                 )
                 return
+
+            # Задержка перед закрытием программы, чтобы дать update.bat время на запуск
+            logging.info("Ожидание перед закрытием программы (5 секунд)...")
+            time.sleep(5)
 
             # Закрываем приложение после запуска update.bat
             logging.info("Закрытие приложения")
