@@ -1167,7 +1167,7 @@ class AuthWindow(QMainWindow):
             self.show_notification(f"Нет прав на чтение архива: {zip_path}", "error")
             return
 
-        # Проверяем содержимое архива и логируем хэш нового VideoBot.exe
+        # Проверяем содержимое архива
         try:
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
                 # Ищем VideoBot.exe в архиве
@@ -1180,14 +1180,6 @@ class AuthWindow(QMainWindow):
                     logging.error("Архив не содержит VideoBot.exe")
                     self.show_notification("Архив не содержит VideoBot.exe. Обновление невозможно.", "error")
                     return
-                # Извлекаем VideoBot.exe во временную папку, чтобы вычислить его хэш
-                temp_exe_path = os.path.join(current_dir, "temp", "VideoBot_temp.exe")
-                os.makedirs(os.path.dirname(temp_exe_path), exist_ok=True)
-                with zip_ref.open(exe_in_zip) as source, open(temp_exe_path, "wb") as target:
-                    target.write(source.read())
-                new_exe_hash = self.compute_file_hash(temp_exe_path)
-                logging.info(f"Хэш нового VideoBot.exe (из архива): {new_exe_hash}")
-                os.remove(temp_exe_path)  # Удаляем временный файл
         except zipfile.BadZipFile as e:
             logging.error(f"Не удалось проверить содержимое архива: {str(e)}")
             self.show_notification(f"Не удалось проверить содержимое архива: {str(e)}.", "error")
@@ -1229,7 +1221,7 @@ class AuthWindow(QMainWindow):
 
             if not use_7z:
                 logging.warning("7z.exe не найден. Используем powershell для извлечения архива.")
-                bat_content = f"""@echo on
+                bat_content = f"""@echo off
                     chcp 65001 >nul
                     echo [%date% %time%] Начало выполнения update.bat >> update.log 2>&1
 
@@ -1255,17 +1247,6 @@ class AuthWindow(QMainWindow):
                         exit /b 1
                     )
                     echo [%date% %time%] Новый VideoBot.exe найден по пути VideoBot.exe >> update.log 2>&1
-
-                    :: Проверка хэша нового VideoBot.exe
-                    echo [%date% %time%] Проверка хэша нового VideoBot.exe >> update.log 2>&1
-                    for /f "delims=" %%i in ('powershell -Command "(Get-FileHash -Path ''VideoBot.exe'' -Algorithm SHA256).Hash.ToLower()"') do set "new_hash=%%i"
-                    echo [%date% %time%] Вычисленный хэш: !new_hash! >> update.log 2>&1
-                    if "{new_exe_hash}"=="!new_hash!" (
-                        echo [%date% %time%] Хэш нового VideoBot.exe совпадает с ожидаемым: !new_hash! >> update.log 2>&1
-                    ) else (
-                        echo [%date% %time%] Ошибка: Хэш нового VideoBot.exe не совпадает. Ожидалось: {new_exe_hash}, получено: !new_hash! >> update.log 2>&1
-                        exit /b 1
-                    )
 
                     :: Обновление version.json
                     echo [%date% %time%] Обновление version.json >> update.log 2>&1
@@ -1316,7 +1297,7 @@ class AuthWindow(QMainWindow):
                     """
             else:
                 # Используем 7z.exe для извлечения архива
-                bat_content = f"""@echo on
+                bat_content = f"""@echo off
                     chcp 65001 >nul
                     echo [%date% %time%] Начало выполнения update.bat >> update.log 2>&1
 
@@ -1342,17 +1323,6 @@ class AuthWindow(QMainWindow):
                         exit /b 1
                     )
                     echo [%date% %time%] Новый VideoBot.exe найден по пути VideoBot.exe >> update.log 2>&1
-
-                    :: Проверка хэша нового VideoBot.exe
-                    echo [%date% %time%] Проверка хэша нового VideoBot.exe >> update.log 2>&1
-                    for /f "delims=" %%i in ('powershell -Command "(Get-FileHash -Path ''VideoBot.exe'' -Algorithm SHA256).Hash.ToLower()"') do set "new_hash=%%i"
-                    echo [%date% %time%] Вычисленный хэш: !new_hash! >> update.log 2>&1
-                    if "{new_exe_hash}"=="!new_hash!" (
-                        echo [%date% %time%] Хэш нового VideoBot.exe совпадает с ожидаемым: !new_hash! >> update.log 2>&1
-                    ) else (
-                        echo [%date% %time%] Ошибка: Хэш нового VideoBot.exe не совпадает. Ожидалось: {new_exe_hash}, получено: !new_hash! >> update.log 2>&1
-                        exit /b 1
-                    )
 
                     :: Обновление version.json
                     echo [%date% %time%] Обновление version.json >> update.log 2>&1
@@ -1422,15 +1392,45 @@ class AuthWindow(QMainWindow):
                 finally:
                     state.client = None
 
-            # Запуск update.bat с правами администратора через powershell с использованием start
-            logging.info("Запуск скрипта обновления с правами администратора")
+            # Запуск update.bat через Планировщик задач (schtasks)
+            logging.info("Запуск скрипта обновления через Планировщик задач с правами администратора")
             try:
-                # Используем powershell с командой start, чтобы процесс был независимым
-                command = f'powershell -Command "Start-Process -FilePath cmd.exe -ArgumentList \'/c {bat_path}\' -WorkingDirectory \'{current_dir}\' -Verb RunAs -WindowStyle Hidden"'
-                os.system(command)
-                logging.info("Скрипт обновления успешно запущен")
+                # Создаём задачу в Планировщике задач
+                task_name = "RunUpdateBat"
+                create_command = f'schtasks /create /tn "{task_name}" /tr "cmd.exe /c \\"{bat_path}\\"" /sc once /st 00:00 /ru "System" /rl HIGHEST /f'
+                run_command = f'schtasks /run /tn "{task_name}"'
+                delete_command = f'schtasks /delete /tn "{task_name}" /f'
+
+                # Создаём задачу
+                create_result = os.system(create_command)
+                if create_result != 0:
+                    logging.error(f"Не удалось создать задачу в Планировщике задач: {create_result}")
+                    self.show_notification(
+                        "Не удалось создать задачу для обновления. Пожалуйста, запустите программу от имени администратора.",
+                        "error"
+                    )
+                    return
+
+                # Запускаем задачу
+                run_result = os.system(run_command)
+                if run_result != 0:
+                    logging.error(f"Не удалось запустить задачу в Планировщике задач: {run_result}")
+                    self.show_notification(
+                        "Не удалось запустить задачу для обновления. Пожалуйста, проверьте права доступа.",
+                        "error"
+                    )
+                    # Удаляем задачу в случае ошибки
+                    os.system(delete_command)
+                    return
+
+                # Удаляем задачу после запуска
+                delete_result = os.system(delete_command)
+                if delete_result != 0:
+                    logging.warning(f"Не удалось удалить задачу из Планировщика задач: {delete_result}")
+
+                logging.info("Скрипт обновления успешно запущен через Планировщик задач")
             except Exception as e:
-                logging.error(f"Не удалось запустить update.bat: {str(e)}")
+                logging.error(f"Не удалось запустить update.bat через Планировщик задач: {str(e)}")
                 self.show_notification(
                     "Не удалось запустить скрипт обновления. Пожалуйста, запустите программу от имени администратора.",
                     "error"
