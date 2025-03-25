@@ -132,7 +132,18 @@ jobs:
           type VideoBot_exe_hash.txt
           REM Логируем размер файла
           dir VideoBot\VideoBot.exe
-          7z a -tzip dist\VideoBot_Update_v${{ steps.version.outputs.VERSION }}.zip VideoBot\VideoBot.exe VideoBot\version.json VideoBot\help_content.json VideoBot\icons
+          REM Создаём временную папку для минорного обновления
+          if exist "temp_incremental" rmdir /s /q "temp_incremental"
+          mkdir "temp_incremental\VideoBot"
+          REM Копируем только нужные файлы
+          copy "VideoBot\VideoBot.exe" "temp_incremental\VideoBot\VideoBot.exe"
+          copy "VideoBot\version.json" "temp_incremental\VideoBot\version.json"
+          copy "VideoBot\help_content.json" "temp_incremental\VideoBot\help_content.json"
+          xcopy "VideoBot\icons" "temp_incremental\VideoBot\icons" /E /I /Y
+          REM Создаём архив из временной папки
+          7z a -tzip dist\VideoBot_Update_v${{ steps.version.outputs.VERSION }}.zip .\temp_incremental\VideoBot\*
+          REM Удаляем временную папку
+          rmdir /s /q "temp_incremental"
         shell: cmd
 
       # Вычисление хэша для полного релиза
