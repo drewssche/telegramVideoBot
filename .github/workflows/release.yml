@@ -34,6 +34,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          REM Проверяем наличие ключевых DLL
+          dir C:\hostedtoolcache\windows\Python\3.10.11\x64\Lib\site-packages\PySide6\Qt6Core.dll || echo "Qt6Core.dll not found"
+          dir C:\hostedtoolcache\windows\Python\3.10.11\x64\Lib\site-packages\PySide6\libstdc++-6.dll || echo "libstdc++-6.dll not found"
           pip list
         shell: cmd
 
@@ -100,9 +103,8 @@ jobs:
           mkdir "dist"
         shell: cmd
 
-      # Сборка полного релиза
-      - name: Build Full Release
-        if: steps.major_release.outputs.IS_MAJOR == 'true'
+      # Сборка релиза (всегда полная)
+      - name: Build Release
         run: |
           set BUILD_TYPE=full
           REM Очистка перед сборкой
@@ -116,55 +118,18 @@ jobs:
           )
           certutil -hashfile VideoBot\VideoBot.exe SHA256 > VideoBot_exe_hash.txt
           type VideoBot_exe_hash.txt
-          REM Логируем размер файла
+          REM Логируем размер файла и содержимое папки
           dir VideoBot\VideoBot.exe
-          7z a -tzip dist\VideoBot_Full_v${{ steps.version.outputs.VERSION }}.zip VideoBot\*
+          dir VideoBot
+          7z a -tzip dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip VideoBot\*
+          REM Проверяем содержимое архива
+          7z l dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip
         shell: cmd
 
-      # Сборка инкрементального релиза
-      - name: Build Incremental Release
-        if: steps.major_release.outputs.IS_MAJOR == 'false'
+      # Вычисление хэша для релиза
+      - name: Generate SHA256 for Release
         run: |
-          set BUILD_TYPE=incremental
-          REM Очистка перед сборкой
-          python setup.py clean > clean_incremental.log 2>&1 || (type clean_incremental.log && exit 1)
-          REM Сборка
-          python setup.py build_exe > build_incremental.log 2>&1 || (type build_incremental.log && exit 1)
-          if not exist "VideoBot\VideoBot.exe" (
-            echo "Error: VideoBot.exe was not created during the build"
-            type build_incremental.log
-            exit 1
-          )
-          certutil -hashfile VideoBot\VideoBot.exe SHA256 > VideoBot_exe_hash.txt
-          type VideoBot_exe_hash.txt
-          REM Логируем размер файла
-          dir VideoBot\VideoBot.exe
-          REM Создаём временную папку для минорного обновления
-          if exist "temp_incremental" rmdir /s /q "temp_incremental"
-          mkdir "temp_incremental\VideoBot"
-          REM Копируем только нужные файлы
-          copy "VideoBot\VideoBot.exe" "temp_incremental\VideoBot\VideoBot.exe"
-          copy "VideoBot\version.json" "temp_incremental\VideoBot\version.json"
-          copy "VideoBot\help_content.json" "temp_incremental\VideoBot\help_content.json"
-          xcopy "VideoBot\icons" "temp_incremental\VideoBot\icons" /E /I /Y
-          REM Создаём архив из временной папки
-          7z a -tzip dist\VideoBot_Update_v${{ steps.version.outputs.VERSION }}.zip .\temp_incremental\VideoBot\*
-          REM Удаляем временную папку
-          rmdir /s /q "temp_incremental"
-        shell: cmd
-
-      # Вычисление хэша для полного релиза
-      - name: Generate SHA256 for Full Release
-        if: steps.major_release.outputs.IS_MAJOR == 'true'
-        run: |
-          certutil -hashfile dist\VideoBot_Full_v${{ steps.version.outputs.VERSION }}.zip SHA256 > dist\VideoBot_Full_v${{ steps.version.outputs.VERSION }}.zip.sha256
-        shell: cmd
-
-      # Вычисление хэша для инкрементального релиза
-      - name: Generate SHA256 for Incremental Release
-        if: steps.major_release.outputs.IS_MAJOR == 'false'
-        run: |
-          certutil -hashfile dist\VideoBot_Update_v${{ steps.version.outputs.VERSION }}.zip SHA256 > dist\VideoBot_Update_v${{ steps.version.outputs.VERSION }}.zip.sha256
+          certutil -hashfile dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip SHA256 > dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip.sha256
         shell: cmd
 
       # Обновление last_full_release_url для крупного релиза
@@ -207,16 +172,13 @@ jobs:
             **Changelog:** 📝
             ${{ steps.version.outputs.CHANGELOG }}
             **Downloads:**
-            - **Full Release**: `VideoBot_Full_v${{ steps.version.outputs.VERSION }}.zip` (for new users or major updates)
-            ${{ steps.major_release.outputs.IS_MAJOR == 'false' && format('- **Incremental Update**: `VideoBot_Update_v{0}.zip` (for existing users)', steps.version.outputs.VERSION) || '' }}
+            - **Release**: `VideoBot_v${{ steps.version.outputs.VERSION }}.zip`
             **Requirements:**
             - FFmpeg: [Download](https://ffmpeg.org/download.html)
             - Visual C++ Redistributable: [Download](https://aka.ms/vs/17/release/vc_redist.x64.exe)
-            **Note:** Extract the ZIP into your VideoBot folder to install or update.
+            **Note:** Extract the ZIP into a clean VideoBot folder to install or update.
           files: |
-            dist/VideoBot_Full_v${{ steps.version.outputs.VERSION }}.zip
-            dist/VideoBot_Full_v${{ steps.version.outputs.VERSION }}.zip.sha256
-            ${{ steps.major_release.outputs.IS_MAJOR == 'false' && format('dist/VideoBot_Update_v{0}.zip', steps.version.outputs.VERSION) || '' }}
-            ${{ steps.major_release.outputs.IS_MAJOR == 'false' && format('dist/VideoBot_Update_v{0}.zip.sha256', steps.version.outputs.VERSION) || '' }}
+            dist/VideoBot_v${{ steps.version.outputs.VERSION }}.zip
+            dist/VideoBot_v${{ steps.version.outputs.VERSION }}.zip.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
