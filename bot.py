@@ -1187,9 +1187,6 @@ class AuthWindow(QMainWindow):
         if not success:
             logging.error(f"Ошибка скачивания: {error}")
             self.show_notification(error, "error")
-            if os.path.exists(zip_path):
-                logging.info(f"Удаление архива после ошибки скачивания: {zip_path}")
-                os.remove(zip_path)
             return
 
         # Проверяем, запущена ли программа с правами администратора
@@ -1221,14 +1218,10 @@ class AuthWindow(QMainWindow):
             )
             return
 
-        # Проверяем, что архив существует и доступен
+        # Проверяем, что архив существует
         if not os.path.exists(zip_path):
             logging.error(f"Архив не найден: {zip_path}")
             self.show_notification(f"Архив не найден: {zip_path}", "error")
-            return
-        if not os.access(zip_path, os.R_OK):
-            logging.error(f"Нет прав на чтение архива: {zip_path}")
-            self.show_notification(f"Нет прав на чтение архива: {zip_path}", "error")
             return
 
         # Проверяем содержимое архива
@@ -1250,15 +1243,6 @@ class AuthWindow(QMainWindow):
 
         try:
             bat_path = os.path.join(current_dir, "update.bat")
-
-            # Проверяем права на запись для bat_path
-            if not self.check_write_permissions():
-                logging.error("Нет прав на запись в текущую директорию")
-                self.show_notification(
-                    "Нет прав на запись в текущую директорию. Запустите программу от имени администратора.",
-                    "error"
-                )
-                return
 
             # Проверяем наличие 7z.exe
             use_7z = False
@@ -1292,7 +1276,7 @@ class AuthWindow(QMainWindow):
                     echo [%date% %time%] Завершение процесса VideoBot.exe >> update.log 2>&1
                     taskkill /F /IM VideoBot.exe >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
-                        echo [%date% %time%] Предупреждение: Не удалось завершить процесс VideoBot.exe >> update.log 2>&1
+                        echo [%date% %time%] Предупреждение: Процесс VideoBot.exe не найден или уже завершён >> update.log 2>&1
                     )
 
                     :: Задержка 3 секунды перед началом обновления
@@ -1310,9 +1294,6 @@ class AuthWindow(QMainWindow):
                         exit /b 1
                     )
                     echo [%date% %time%] Архив успешно распакован >> update.log 2>&1
-
-                    :: Задержка после распаковки
-                    timeout /t 2 /nobreak >nul
 
                     :: Обновление version.json
                     echo [%date% %time%] Обновление version.json >> update.log 2>&1
@@ -1334,24 +1315,6 @@ class AuthWindow(QMainWindow):
                         exit /b 1
                     )
                     echo [%date% %time%] Новая версия запущена >> update.log 2>&1
-
-                    :: Задержка перед удалением файлов
-                    timeout /t 2 /nobreak >nul
-
-                    :: Удаление архива
-                    echo [%date% %time%] Удаление архива {zip_path} >> update.log 2>&1
-                    del "{zip_path}" >> update.log 2>&1
-                    if %ERRORLEVEL% neq 0 (
-                        echo [%date% %time%] Предупреждение: Не удалось удалить архив >> update.log 2>&1
-                    )
-                    echo [%date% %time%] Архив удалён >> update.log 2>&1
-
-                    :: Удаление временной папки temp, если она пуста
-                    echo [%date% %time%] Удаление папки temp, если она пуста >> update.log 2>&1
-                    rmdir "temp" >> update.log 2>&1
-                    if %ERRORLEVEL% neq 0 (
-                        echo [%date% %time%] Предупреждение: Не удалось удалить папку temp (возможно, она не пуста) >> update.log 2>&1
-                    )
 
                     :: Удаление bat-файла
                     echo [%date% %time%] Удаление скрипта обновления update.bat >> update.log 2>&1
@@ -1371,7 +1334,7 @@ class AuthWindow(QMainWindow):
                     echo [%date% %time%] Завершение процесса VideoBot.exe >> update.log 2>&1
                     taskkill /F /IM VideoBot.exe >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
-                        echo [%date% %time%] Предупреждение: Не удалось завершить процесс VideoBot.exe >> update.log 2>&1
+                        echo [%date% %time%] Предупреждение: Процесс VideoBot.exe не найден или уже завершён >> update.log 2>&1
                     )
 
                     :: Задержка 3 секунды перед началом обновления
@@ -1389,9 +1352,6 @@ class AuthWindow(QMainWindow):
                         exit /b 1
                     )
                     echo [%date% %time%] Архив успешно распакован >> update.log 2>&1
-
-                    :: Задержка после распаковки
-                    timeout /t 2 /nobreak >nul
 
                     :: Обновление version.json
                     echo [%date% %time%] Обновление version.json >> update.log 2>&1
@@ -1413,24 +1373,6 @@ class AuthWindow(QMainWindow):
                         exit /b 1
                     )
                     echo [%date% %time%] Новая версия запущена >> update.log 2>&1
-
-                    :: Задержка перед удалением файлов
-                    timeout /t 2 /nobreak >nul
-
-                    :: Удаление архива
-                    echo [%date% %time%] Удаление архива {zip_path} >> update.log 2>&1
-                    del "{zip_path}" >> update.log 2>&1
-                    if %ERRORLEVEL% neq 0 (
-                        echo [%date% %time%] Предупреждение: Не удалось удалить архив >> update.log 2>&1
-                    )
-                    echo [%date% %time%] Архив удалён >> update.log 2>&1
-
-                    :: Удаление временной папки temp, если она пуста
-                    echo [%date% %time%] Удаление папки temp, если она пуста >> update.log 2>&1
-                    rmdir "temp" >> update.log 2>&1
-                    if %ERRORLEVEL% neq 0 (
-                        echo [%date% %time%] Предупреждение: Не удалось удалить папку temp (возможно, она не пуста) >> update.log 2>&1
-                    )
 
                     :: Удаление bat-файла
                     echo [%date% %time%] Удаление скрипта обновления update.bat >> update.log 2>&1
@@ -1487,9 +1429,6 @@ class AuthWindow(QMainWindow):
         except Exception as e:
             logging.error(f"Ошибка при выполнении обновления: {str(e)}")
             self.show_notification(f"Ошибка при выполнении обновления: {str(e)}.", "error")
-            if os.path.exists(zip_path):
-                logging.info(f"Удаление архива после ошибки: {zip_path}")
-                os.remove(zip_path)
 
     def handle_update_error(self, error_message):
         try:
