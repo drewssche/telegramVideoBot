@@ -225,6 +225,7 @@ class DownloadThread(QThread):
         response = None
         for attempt in range(self.max_retries):
             try:
+                logging.info(f"Попытка {attempt + 1}/{self.max_retries} скачать файл с URL: {self.url}")
                 response = requests.get(self.url, stream=True, timeout=10)
                 response.raise_for_status()
 
@@ -232,16 +233,26 @@ class DownloadThread(QThread):
                 downloaded_size = 0
                 chunk_size = 8192
 
+                # Если total_size неизвестен, будем использовать условный прогресс
+                if total_size == 0:
+                    logging.warning("Размер файла неизвестен, прогресс будет условным")
+                    total_size = 1  # Для условного прогресса
+
                 with open(self.output_path, "wb") as f:
                     for chunk in response.iter_content(chunk_size=chunk_size):
                         if self.isInterruptionRequested():  # Проверка на отмену
+                            logging.info("Скачивание отменено пользователем")
                             self.finished.emit(False, "Скачивание отменено пользователем.")
                             return
                         if chunk:
                             f.write(chunk)
                             downloaded_size += len(chunk)
                             if total_size > 0:
-                                progress = int((downloaded_size / total_size) * 100)
+                                progress = min(int((downloaded_size / total_size) * 100), 100)
+                                self.progress.emit(progress)
+                            else:
+                                # Условный прогресс, если размер неизвестен
+                                progress = min(int((downloaded_size / (downloaded_size + chunk_size)) * 100), 100)
                                 self.progress.emit(progress)
 
                 # Проверяем, что файл доступен для чтения
@@ -250,6 +261,7 @@ class DownloadThread(QThread):
                 if not os.access(self.output_path, os.R_OK):
                     raise PermissionError(f"Нет прав на чтение файла {self.output_path} после скачивания")
 
+                logging.info("Скачивание успешно завершено")
                 self.finished.emit(True, "")
                 return
 
@@ -259,12 +271,15 @@ class DownloadThread(QThread):
                     time.sleep(2)  # Задержка перед повторной попыткой
                     continue
                 else:
+                    logging.error(f"Не удалось скачать обновление после {self.max_retries} попыток: {str(e)}")
                     self.finished.emit(False, f"Не удалось скачать обновление после {self.max_retries} попыток: {str(e)}.")
                     return
             except (PermissionError, IOError) as e:
+                logging.error(f"Ошибка при записи файла {self.output_path}: {str(e)}")
                 self.finished.emit(False, f"Ошибка при записи файла {self.output_path}: {str(e)}.")
                 return
             except Exception as e:
+                logging.error(f"Неожиданная ошибка при скачивании: {str(e)}")
                 self.finished.emit(False, f"Неожиданная ошибка при скачивании: {str(e)}.")
                 return
             finally:
@@ -616,8 +631,76 @@ async def clean_temp_files():
     TEMP_FILES_DIR = TEMP_DIR  # Предполагается, что TEMP_DIR уже определён как temp-files
     # Папка temp для архивов обновлений
     UPDATE_TEMP_DIR = os.path.join(os.getcwd(), "temp")  # D:\VideoBot\temp
+    # Корневая директория программы
+    ROOT_DIR = os.getcwd()  # D:\VideoBot
 
     logging.info("Запущена фоновая очистка временных файлов")
+
+    # Однократная очистка при запуске функции
+    logging.info("Выполняется однократная очистка при запуске...")
+
+    # 1. Очистка папки temp-files при запуске
+    if os.path.exists(TEMP_FILES_DIR):
+        for filename in os.listdir(TEMP_FILES_DIR):
+            file_path = os.path.join(TEMP_FILES_DIR, filename)
+            if os.path.isfile(file_path):
+                for attempt in range(3):
+                    try:
+                        os.remove(file_path)
+                        logging.info(f"Удалён файл в temp-files при запуске: {file_path}")
+                        break
+                    except PermissionError as e:
+                        if "[WinError 32]" in str(e):
+                            logging.warning(f"Файл {file_path} занят, повторная попытка {attempt + 1}/3...")
+                            await asyncio.sleep(5)
+                        else:
+                            logging.error(f"Не удалось удалить файл {file_path}: {str(e)}")
+                            break
+                    except Exception as e:
+                        logging.error(f"Не удалось удалить файл {file_path}: {str(e)}")
+                        break
+
+    # 2. Очистка папки temp при запуске
+    if os.path.exists(UPDATE_TEMP_DIR):
+        for filename in os.listdir(UPDATE_TEMP_DIR):
+            file_path = os.path.join(UPDATE_TEMP_DIR, filename)
+            if os.path.isfile(file_path):
+                for attempt in range(3):
+                    try:
+                        os.remove(file_path)
+                        logging.info(f"Удалён файл в temp при запуске: {file_path}")
+                        break
+                    except PermissionError as e:
+                        if "[WinError 32]" in str(e):
+                            logging.warning(f"Файл {file_path} занят, повторная попытка {attempt + 1}/3...")
+                            await asyncio.sleep(5)
+                        else:
+                            logging.error(f"Не удалось удалить файл {file_path}: {str(e)}")
+                            break
+                    except Exception as e:
+                        logging.error(f"Не удалось удалить файл {file_path}: {str(e)}")
+                        break
+
+    # 3. Удаление update.bat при запуске
+    bat_path = os.path.join(ROOT_DIR, "update.bat")
+    if os.path.exists(bat_path):
+        for attempt in range(3):
+            try:
+                os.remove(bat_path)
+                logging.info(f"Удалён update.bat при запуске: {bat_path}")
+                break
+            except PermissionError as e:
+                if "[WinError 32]" in str(e):
+                    logging.warning(f"Файл {bat_path} занят, повторная попытка {attempt + 1}/3...")
+                    await asyncio.sleep(5)
+                else:
+                    logging.error(f"Не удалось удалить файл {bat_path}: {str(e)}")
+                    break
+            except Exception as e:
+                logging.error(f"Не удалось удалить файл {bat_path}: {str(e)}")
+                break
+
+    # Основной цикл очистки
     while True:
         # 1. Очистка папки temp-files (существующая логика)
         if state.switch_is_on and os.path.exists(TEMP_FILES_DIR):
@@ -645,7 +728,7 @@ async def clean_temp_files():
                             logging.error(f"Не удалось удалить файл {file_path}: {str(e)}")
                             break
 
-        # 2. Очистка папки temp (новая логика)
+        # 2. Очистка папки temp (обновлённая логика с учётом возраста)
         if state.switch_is_on and os.path.exists(UPDATE_TEMP_DIR):
             for filename in os.listdir(UPDATE_TEMP_DIR):
                 file_path = os.path.join(UPDATE_TEMP_DIR, filename)
@@ -671,17 +754,28 @@ async def clean_temp_files():
                             logging.error(f"Не удалось удалить файл {file_path}: {str(e)}")
                             break
 
-            # После удаления файлов пытаемся удалить саму папку temp, если она пуста
-            try:
-                os.rmdir(UPDATE_TEMP_DIR)
-                logging.info(f"Папка {UPDATE_TEMP_DIR} успешно удалена (была пуста)")
-            except OSError as e:
-                if e.errno == 16:  # Папка не пуста
-                    logging.debug(f"Папка {UPDATE_TEMP_DIR} не пуста, удаление не выполнено")
-                else:
-                    logging.error(f"Не удалось удалить папку {UPDATE_TEMP_DIR}: {str(e)}")
-            except Exception as e:
-                logging.error(f"Не удалось удалить папку {UPDATE_TEMP_DIR}: {str(e)}")
+        # 3. Очистка update.bat в корне программы
+        if state.switch_is_on and os.path.exists(bat_path):
+            # Проверяем возраст файла
+            file_age = time.time() - os.path.getmtime(bat_path)
+            if file_age < min_age:
+                logging.debug(f"Файл {bat_path} слишком новый (возраст: {file_age:.2f} сек), пропускаем")
+                continue
+            for attempt in range(3):
+                try:
+                    os.remove(bat_path)
+                    logging.info(f"Удалён устаревший update.bat: {bat_path}")
+                    break
+                except PermissionError as e:
+                    if "[WinError 32]" in str(e):
+                        logging.warning(f"Файл {bat_path} занят, повторная попытка {attempt + 1}/3...")
+                        await asyncio.sleep(5)
+                    else:
+                        logging.error(f"Не удалось удалить файл {bat_path}: {str(e)}")
+                        break
+                except Exception as e:
+                    logging.error(f"Не удалось удалить файл {bat_path}: {str(e)}")
+                    break
 
         await asyncio.sleep(check_interval)
 
@@ -1155,7 +1249,7 @@ class AuthWindow(QMainWindow):
         logging.info(f"Ожидаемый хэш: {self.download_hash}")
 
         # Создаём прогресс-бар
-        progress = QProgressDialog("", "🚫 Отмена", 0, 100, self)
+        progress = QProgressDialog("Скачивание обновления...", "🚫 Отмена", 0, 100, self)
         progress.setWindowTitle("Обновление")
         progress.setWindowModality(Qt.WindowModal)
         progress.setAutoClose(False)
@@ -1182,7 +1276,6 @@ class AuthWindow(QMainWindow):
         """)
 
         # Настраиваем текст прогресс-диалога
-        progress.setLabelText("Скачивание обновления...")
         label = progress.findChild(QLabel)
         if label:
             label.setStyleSheet("""
@@ -1193,7 +1286,7 @@ class AuthWindow(QMainWindow):
             """)
             label.setAlignment(Qt.AlignCenter)
 
-        # Создаём кастомный виджет для дополнительной информации
+        # Создаём виджет для дополнительной информации
         info_widget = QWidget()
         info_layout = QVBoxLayout(info_widget)
         info_layout.setContentsMargins(0, 0, 0, 0)
@@ -1218,8 +1311,15 @@ class AuthWindow(QMainWindow):
         info_layout.addWidget(size_label)
         info_layout.addWidget(speed_label)
 
-        # Устанавливаем кастомный виджет как bar-виджет (место прогресс-бара)
-        progress.setBar(info_widget)
+        # Добавляем info_widget в layout прогресс-диалога
+        layout = progress.layout()
+        if layout:
+            layout.insertWidget(2, info_widget)  # Добавляем после прогресс-бара
+            layout.insertSpacing(1, 10)  # Отступ между заголовком и прогресс-баром
+            layout.insertSpacing(3, 5)   # Отступ между прогресс-баром и info_widget
+            layout.insertSpacing(4, 10)  # Отступ перед кнопкой
+
+        # Настраиваем прогресс-бар
         progress_bar = progress.findChild(QProgressBar)
         if progress_bar:
             progress_bar.setFormat("%p%")  # Формат отображения процента
@@ -1324,7 +1424,7 @@ class AuthWindow(QMainWindow):
             logging.error(f"Не удалось получить размер файла: {str(e)}")
             size_label.setText("Загружено: 0.0 / Неизвестно")
 
-        progress.canceled.connect(self.download_thread.terminate)
+        progress.canceled.connect(self.download_thread.requestInterruption)
 
         progress.show()
 
@@ -1469,17 +1569,6 @@ class AuthWindow(QMainWindow):
                         exit /b 1
                     )
                     echo [%date% %time%] Новая версия запущена >> update.log 2>&1
-
-                    :: Задержка 2 секунды, чтобы дать VideoBot.exe время на запуск
-                    timeout /t 2 /nobreak >nul
-
-                    :: Удаление bat-файла
-                    echo [%date% %time%] Удаление скрипта обновления update.bat >> update.log 2>&1
-                    del "update.bat" >> update.log 2>&1
-                    if %ERRORLEVEL% neq 0 (
-                        echo [%date% %time%] Предупреждение: Не удалось удалить скрипт обновления >> update.log 2>&1
-                    )
-                    echo [%date% %time%] Скрипт обновления удалён >> update.log 2>&1
                     """
             else:
                 # Используем 7z.exe для извлечения архива
@@ -1530,17 +1619,6 @@ class AuthWindow(QMainWindow):
                         exit /b 1
                     )
                     echo [%date% %time%] Новая версия запущена >> update.log 2>&1
-
-                    :: Задержка 2 секунды, чтобы дать VideoBot.exe время на запуск
-                    timeout /t 2 /nobreak >nul
-
-                    :: Удаление bat-файла
-                    echo [%date% %time%] Удаление скрипта обновления update.bat >> update.log 2>&1
-                    del "update.bat" >> update.log 2>&1
-                    if %ERRORLEVEL% neq 0 (
-                        echo [%date% %time%] Предупреждение: Не удалось удалить скрипт обновления >> update.log 2>&1
-                    )
-                    echo [%date% %time%] Скрипт обновления удалён >> update.log 2>&1
                     """
 
             # Создаём update.bat
