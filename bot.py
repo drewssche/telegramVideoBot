@@ -225,7 +225,6 @@ class DownloadThread(QThread):
         response = None
         for attempt in range(self.max_retries):
             try:
-                logging.info(f"Попытка {attempt + 1}/{self.max_retries} скачать файл с URL: {self.url}")
                 response = requests.get(self.url, stream=True, timeout=10)
                 response.raise_for_status()
 
@@ -233,26 +232,16 @@ class DownloadThread(QThread):
                 downloaded_size = 0
                 chunk_size = 8192
 
-                # Если total_size неизвестен, будем использовать условный прогресс
-                if total_size == 0:
-                    logging.warning("Размер файла неизвестен, прогресс будет условным")
-                    total_size = 1  # Для условного прогресса
-
                 with open(self.output_path, "wb") as f:
                     for chunk in response.iter_content(chunk_size=chunk_size):
                         if self.isInterruptionRequested():  # Проверка на отмену
-                            logging.info("Скачивание отменено пользователем")
                             self.finished.emit(False, "Скачивание отменено пользователем.")
                             return
                         if chunk:
                             f.write(chunk)
                             downloaded_size += len(chunk)
                             if total_size > 0:
-                                progress = min(int((downloaded_size / total_size) * 100), 100)
-                                self.progress.emit(progress)
-                            else:
-                                # Условный прогресс, если размер неизвестен
-                                progress = min(int((downloaded_size / (downloaded_size + chunk_size)) * 100), 100)
+                                progress = int((downloaded_size / total_size) * 100)
                                 self.progress.emit(progress)
 
                 # Проверяем, что файл доступен для чтения
@@ -261,7 +250,6 @@ class DownloadThread(QThread):
                 if not os.access(self.output_path, os.R_OK):
                     raise PermissionError(f"Нет прав на чтение файла {self.output_path} после скачивания")
 
-                logging.info("Скачивание успешно завершено")
                 self.finished.emit(True, "")
                 return
 
@@ -271,15 +259,12 @@ class DownloadThread(QThread):
                     time.sleep(2)  # Задержка перед повторной попыткой
                     continue
                 else:
-                    logging.error(f"Не удалось скачать обновление после {self.max_retries} попыток: {str(e)}")
                     self.finished.emit(False, f"Не удалось скачать обновление после {self.max_retries} попыток: {str(e)}.")
                     return
             except (PermissionError, IOError) as e:
-                logging.error(f"Ошибка при записи файла {self.output_path}: {str(e)}")
                 self.finished.emit(False, f"Ошибка при записи файла {self.output_path}: {str(e)}.")
                 return
             except Exception as e:
-                logging.error(f"Неожиданная ошибка при скачивании: {str(e)}")
                 self.finished.emit(False, f"Неожиданная ошибка при скачивании: {str(e)}.")
                 return
             finally:
@@ -906,6 +891,86 @@ class ChangelogDialog(QDialog):
         if self.changelog_list.count() == 0:
             self.changelog_list.addItem("Чейнджлог отсутствует")
 
+class UpdateDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Обновление")
+        self.setFixedSize(450, 180)
+        self.setStyleSheet("background-color: #2F2F2F; color: #FFFFFF;")
+
+        # Создаём layout
+        layout = QVBoxLayout(self)
+        layout.setSpacing(5)
+
+        # Заголовок
+        self.title_label = QLabel("Скачивание обновления...")
+        self.title_label.setStyleSheet("""
+            font-family: 'Segoe UI';
+            font-size: 14px;
+            font-weight: bold;
+            color: #FFFFFF;
+        """)
+        self.title_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.title_label)
+
+        # Прогресс-бар
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setFormat("%p%")
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: none;
+                background-color: #404040;
+                color: #FFFFFF;
+                text-align: center;
+                font-family: 'Segoe UI';
+                font-size: 12px;
+                font-weight: bold;
+            }
+            QProgressBar::chunk {
+                background-color: #00CC00;
+            }
+        """)
+        layout.addWidget(self.progress_bar)
+
+        # Информация о размере
+        self.size_label = QLabel("Загружено: 0.0 / 0.0 Мб")
+        self.size_label.setStyleSheet("""
+            font-family: 'Segoe UI';
+            font-size: 12px;
+            color: #D3D3D3;
+        """)
+        self.size_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.size_label)
+
+        # Информация о скорости
+        self.speed_label = QLabel("Скорость: 0.0 MiB/s")
+        self.speed_label.setStyleSheet("""
+            font-family: 'Segoe UI';
+            font-size: 12px;
+            color: #D3D3D3;
+        """)
+        self.speed_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.speed_label)
+
+        # Кнопка "Отмена"
+        self.cancel_button = QPushButton("🚫 Отмена")
+        self.cancel_button.setFixedWidth(180)
+        self.cancel_button.setStyleSheet("""
+            QPushButton {
+                background-color: #505050;
+                color: #FFFFFF;
+                font-family: 'Segoe UI';
+                font-size: 12px;
+                padding: 5px;
+                border: none;
+            }
+            QPushButton:hover {
+                background-color: #606060;
+            }
+        """)
+        layout.addWidget(self.cancel_button, alignment=Qt.AlignCenter)
+
 # Главное окно авторизации
 class AuthWindow(QMainWindow):
     def __init__(self):
@@ -1248,100 +1313,8 @@ class AuthWindow(QMainWindow):
         logging.info(f"URL для скачивания: {self.download_url}")
         logging.info(f"Ожидаемый хэш: {self.download_hash}")
 
-        # Создаём прогресс-бар
-        progress = QProgressDialog("Скачивание обновления...", "🚫 Отмена", 0, 100, self)
-        progress.setWindowTitle("Обновление")
-        progress.setWindowModality(Qt.WindowModal)
-        progress.setAutoClose(False)
-        progress.setFixedSize(450, 180)  # Увеличиваем размер окна
-
-        # Настраиваем общий стиль окна
-        progress.setStyleSheet("""
-            QProgressDialog {
-                background-color: #2F2F2F;
-                color: #FFFFFF;
-            }
-            QProgressBar {
-                border: none;
-                background-color: #404040;
-                color: #FFFFFF;
-                text-align: center;
-                font-family: 'Segoe UI';
-                font-size: 12px;
-                font-weight: bold;
-            }
-            QProgressBar::chunk {
-                background-color: #00CC00;
-            }
-        """)
-
-        # Настраиваем текст прогресс-диалога
-        label = progress.findChild(QLabel)
-        if label:
-            label.setStyleSheet("""
-                font-family: 'Segoe UI';
-                font-size: 14px;
-                font-weight: bold;
-                color: #FFFFFF;
-            """)
-            label.setAlignment(Qt.AlignCenter)
-
-        # Создаём виджет для дополнительной информации
-        info_widget = QWidget()
-        info_layout = QVBoxLayout(info_widget)
-        info_layout.setContentsMargins(0, 0, 0, 0)
-        info_layout.setSpacing(5)
-
-        size_label = QLabel("Загружено: 0.0 / 0.0 Мб")
-        size_label.setStyleSheet("""
-            font-family: 'Segoe UI';
-            font-size: 12px;
-            color: #D3D3D3;
-        """)
-        size_label.setAlignment(Qt.AlignCenter)
-
-        speed_label = QLabel("Скорость: 0.0 MiB/s")
-        speed_label.setStyleSheet("""
-            font-family: 'Segoe UI';
-            font-size: 12px;
-            color: #D3D3D3;
-        """)
-        speed_label.setAlignment(Qt.AlignCenter)
-
-        info_layout.addWidget(size_label)
-        info_layout.addWidget(speed_label)
-
-        # Добавляем info_widget в layout прогресс-диалога
-        layout = progress.layout()
-        if layout:
-            layout.insertWidget(2, info_widget)  # Добавляем после прогресс-бара
-            layout.insertSpacing(1, 10)  # Отступ между заголовком и прогресс-баром
-            layout.insertSpacing(3, 5)   # Отступ между прогресс-баром и info_widget
-            layout.insertSpacing(4, 10)  # Отступ перед кнопкой
-
-        # Настраиваем прогресс-бар
-        progress_bar = progress.findChild(QProgressBar)
-        if progress_bar:
-            progress_bar.setFormat("%p%")  # Формат отображения процента
-            progress_bar.setFixedHeight(20)  # Устанавливаем высоту прогресс-бара
-
-        # Настраиваем кнопку "Отмена"
-        cancel_button = progress.findChild(QPushButton)
-        if cancel_button:
-            cancel_button.setFixedWidth(180)
-            cancel_button.setStyleSheet("""
-                QPushButton {
-                    background-color: #505050;
-                    color: #FFFFFF;
-                    font-family: 'Segoe UI';
-                    font-size: 12px;
-                    padding: 5px;
-                    border: none;
-                }
-                QPushButton:hover {
-                    background-color: #606060;
-                }
-            """)
+        # Создаём кастомный диалог
+        progress = UpdateDialog(self)
 
         # Переменные для отслеживания размера и скорости
         total_size_mb = 0
@@ -1353,44 +1326,44 @@ class AuthWindow(QMainWindow):
         def update_download_info(value):
             nonlocal downloaded_size_mb, last_downloaded_mb, last_update_time, total_size_mb
             # Обновляем процент и цвет текста
-            if progress_bar:
-                if value < 50:
-                    progress_bar.setStyleSheet("""
-                        QProgressBar {
-                            border: none;
-                            background-color: #404040;
-                            color: #FFFFFF;
-                            text-align: center;
-                            font-family: 'Segoe UI';
-                            font-size: 12px;
-                            font-weight: bold;
-                        }
-                        QProgressBar::chunk {
-                            background-color: #00CC00;
-                        }
-                    """)
-                else:
-                    progress_bar.setStyleSheet("""
-                        QProgressBar {
-                            border: none;
-                            background-color: #404040;
-                            color: #000000;
-                            text-align: center;
-                            font-family: 'Segoe UI';
-                            font-size: 12px;
-                            font-weight: bold;
-                        }
-                        QProgressBar::chunk {
-                            background-color: #00CC00;
-                        }
-                    """)
+            progress.progress_bar.setValue(value)
+            if value < 50:
+                progress.progress_bar.setStyleSheet("""
+                    QProgressBar {
+                        border: none;
+                        background-color: #404040;
+                        color: #FFFFFF;
+                        text-align: center;
+                        font-family: 'Segoe UI';
+                        font-size: 12px;
+                        font-weight: bold;
+                    }
+                    QProgressBar::chunk {
+                        background-color: #00CC00;
+                    }
+                """)
+            else:
+                progress.progress_bar.setStyleSheet("""
+                    QProgressBar {
+                        border: none;
+                        background-color: #404040;
+                        color: #000000;
+                        text-align: center;
+                        font-family: 'Segoe UI';
+                        font-size: 12px;
+                        font-weight: bold;
+                    }
+                    QProgressBar::chunk {
+                        background-color: #00CC00;
+                    }
+                """)
 
             # Обновляем информацию о размере
             if total_size_mb > 0:
                 downloaded_size_mb = (value / 100) * total_size_mb
-                size_label.setText(f"Загружено: {downloaded_size_mb:.1f} / {total_size_mb:.1f} Мб")
+                progress.size_label.setText(f"Загружено: {downloaded_size_mb:.1f} / {total_size_mb:.1f} Мб")
             else:
-                size_label.setText(f"Загружено: {downloaded_size_mb:.1f} / Неизвестно")
+                progress.size_label.setText(f"Загружено: {downloaded_size_mb:.1f} / Неизвестно")
 
             # Обновляем скорость
             current_time = time.time()
@@ -1398,7 +1371,7 @@ class AuthWindow(QMainWindow):
             if time_diff >= 1.0:  # Обновляем скорость каждую секунду
                 downloaded_diff = downloaded_size_mb - last_downloaded_mb
                 speed_mib_s = downloaded_diff / time_diff
-                speed_label.setText(f"Скорость: {speed_mib_s:.1f} MiB/s")
+                progress.speed_label.setText(f"Скорость: {speed_mib_s:.1f} MiB/s")
                 last_downloaded_mb = downloaded_size_mb
                 last_update_time = current_time
 
@@ -1409,8 +1382,7 @@ class AuthWindow(QMainWindow):
 
         # Запускаем поток скачивания
         self.download_thread = DownloadThread(self.download_url, zip_path)
-        self.download_thread.progress.connect(progress.setValue)
-        self.download_thread.progress.connect(update_download_info)  # Подключаем обновление информации
+        self.download_thread.progress.connect(update_download_info)
         self.download_thread.finished.connect(lambda success, error: self.on_download_finished(success, error, progress, zip_path))
         self.download_thread.start()
 
@@ -1419,14 +1391,16 @@ class AuthWindow(QMainWindow):
             response = requests.head(self.download_url, timeout=10)
             total_size_bytes = int(response.headers.get('content-length', 0))
             total_size_mb = total_size_bytes / (1024 * 1024)  # Переводим в Мб
-            size_label.setText(f"Загружено: 0.0 / {total_size_mb:.1f} Мб")
+            progress.size_label.setText(f"Загружено: 0.0 / {total_size_mb:.1f} Мб")
         except Exception as e:
             logging.error(f"Не удалось получить размер файла: {str(e)}")
-            size_label.setText("Загружено: 0.0 / Неизвестно")
+            progress.size_label.setText("Загружено: 0.0 / Неизвестно")
 
-        progress.canceled.connect(self.download_thread.requestInterruption)
+        # Подключаем кнопку "Отмена"
+        progress.cancel_button.clicked.connect(self.download_thread.terminate)
+        progress.cancel_button.clicked.connect(progress.close)
 
-        progress.show()
+        progress.exec_()
 
     def on_download_finished(self, success, error, progress, zip_path):
         # Функция проверки прав администратора
