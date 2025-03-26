@@ -1193,7 +1193,12 @@ class AuthWindow(QMainWindow):
             """)
             label.setAlignment(Qt.AlignCenter)
 
-        # Создаём лейблы для информации о загрузке
+        # Создаём кастомный виджет для дополнительной информации
+        info_widget = QWidget()
+        info_layout = QVBoxLayout(info_widget)
+        info_layout.setContentsMargins(0, 0, 0, 0)
+        info_layout.setSpacing(5)
+
         size_label = QLabel("Загружено: 0.0 / 0.0 Мб")
         size_label.setStyleSheet("""
             font-family: 'Segoe UI';
@@ -1210,10 +1215,15 @@ class AuthWindow(QMainWindow):
         """)
         speed_label.setAlignment(Qt.AlignCenter)
 
-        # Настраиваем прогресс-бар
+        info_layout.addWidget(size_label)
+        info_layout.addWidget(speed_label)
+
+        # Устанавливаем кастомный виджет как bar-виджет (место прогресс-бара)
+        progress.setBar(info_widget)
         progress_bar = progress.findChild(QProgressBar)
         if progress_bar:
             progress_bar.setFormat("%p%")  # Формат отображения процента
+            progress_bar.setFixedHeight(20)  # Устанавливаем высоту прогресс-бара
 
         # Настраиваем кнопку "Отмена"
         cancel_button = progress.findChild(QPushButton)
@@ -1232,28 +1242,6 @@ class AuthWindow(QMainWindow):
                     background-color: #606060;
                 }
             """)
-
-        # Добавляем кастомные лейблы в layout прогресс-диалога
-        layout = progress.layout()
-        if layout:
-            # Удаляем стандартный лейбл прогресса, чтобы заменить его
-            for i in range(layout.count()):
-                item = layout.itemAt(i)
-                if item.widget() and isinstance(item.widget(), QLabel):
-                    layout.removeWidget(item.widget())
-                    item.widget().deleteLater()
-                    break
-
-            # Добавляем наши элементы
-            layout.insertWidget(0, label)  # Заголовок
-            layout.insertSpacing(1, 10)  # Отступ
-            layout.insertWidget(2, progress_bar)  # Прогресс-бар
-            layout.insertSpacing(3, 5)  # Отступ
-            layout.insertWidget(4, size_label)  # Размер
-            layout.insertSpacing(5, 5)  # Отступ
-            layout.insertWidget(6, speed_label)  # Скорость
-            layout.insertSpacing(7, 10)  # Отступ перед кнопкой
-            layout.insertWidget(8, cancel_button)  # Кнопка
 
         # Переменные для отслеживания размера и скорости
         total_size_mb = 0
