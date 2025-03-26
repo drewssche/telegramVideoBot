@@ -213,6 +213,7 @@ def update_response(response_id, text):
 
 class DownloadThread(QThread):
     progress = Signal(int)
+    downloadedBytes = Signal(int)  # Новый сигнал для количества загруженных байтов
     finished = Signal(bool, str)
 
     def __init__(self, url, output_path):
@@ -240,6 +241,7 @@ class DownloadThread(QThread):
                         if chunk:
                             f.write(chunk)
                             downloaded_size += len(chunk)
+                            self.downloadedBytes.emit(downloaded_size)  # Испускаем сигнал с количеством байтов
                             if total_size > 0:
                                 progress = int((downloaded_size / total_size) * 100)
                                 self.progress.emit(progress)
@@ -1322,9 +1324,32 @@ class AuthWindow(QMainWindow):
         last_downloaded_mb = 0
         last_update_time = time.time()
 
+        # Получаем информацию о последнем релизе через GitHub API
+        try:
+            # Запрос к API для получения последнего релиза
+            api_url = "https://api.github.com/repos/drewssche/telegramVideoBot/releases/latest"
+            response = requests.get(api_url, timeout=10)
+            response.raise_for_status()
+            release_data = response.json()
+
+            # Извлекаем URL для скачивания и размер файла
+            for asset in release_data.get("assets", []):
+                if asset["name"].endswith(".zip"):  # Предполагаем, что это ZIP-файл
+                    self.download_url = asset["browser_download_url"]
+                    total_size_bytes = asset["size"]
+                    total_size_mb = total_size_bytes / (1024 * 1024)  # Переводим в Мб
+                    progress.size_label.setText(f"Загружено: 0.0 / {total_size_mb:.1f} Мб")
+                    break
+            else:
+                logging.warning("Не удалось найти подходящий актив в последнем релизе")
+                progress.size_label.setText("Загружено: 0.0 / Неизвестно")
+        except Exception as e:
+            logging.error(f"Не удалось получить информацию о релизе через GitHub API: {str(e)}")
+            progress.size_label.setText("Загружено: 0.0 / Неизвестно")
+
         # Функция для обновления информации о загрузке
         def update_download_info(value):
-            nonlocal downloaded_size_mb, last_downloaded_mb, last_update_time, total_size_mb
+            nonlocal downloaded_size_mb
             # Обновляем процент и цвет текста
             progress.progress_bar.setValue(value)
             if value < 50:
@@ -1365,6 +1390,13 @@ class AuthWindow(QMainWindow):
             else:
                 progress.size_label.setText(f"Загружено: {downloaded_size_mb:.1f} / Неизвестно")
 
+        # Функция для расчёта скорости на основе загруженных байтов
+        def update_download_speed(downloaded_bytes):
+            nonlocal downloaded_size_mb, last_downloaded_mb, last_update_time
+            downloaded_size_mb = downloaded_bytes / (1024 * 1024)  # Переводим байты в Мб
+            if total_size_mb == 0:  # Если размер неизвестен, обновляем только загруженное
+                progress.size_label.setText(f"Загружено: {downloaded_size_mb:.1f} / Неизвестно")
+
             # Обновляем скорость
             current_time = time.time()
             time_diff = current_time - last_update_time
@@ -1383,18 +1415,10 @@ class AuthWindow(QMainWindow):
         # Запускаем поток скачивания
         self.download_thread = DownloadThread(self.download_url, zip_path)
         self.download_thread.progress.connect(update_download_info)
+        self.download_thread.downloadedBytes.connect(update_download_speed)  # Подключаем новый сигнал
         self.download_thread.finished.connect(lambda success, error: self.on_download_finished(success, error, progress, zip_path))
+        self.download_thread.finished.connect(progress.close)  # Закрываем диалог после завершения
         self.download_thread.start()
-
-        # Получаем размер файла
-        try:
-            response = requests.head(self.download_url, timeout=10)
-            total_size_bytes = int(response.headers.get('content-length', 0))
-            total_size_mb = total_size_bytes / (1024 * 1024)  # Переводим в Мб
-            progress.size_label.setText(f"Загружено: 0.0 / {total_size_mb:.1f} Мб")
-        except Exception as e:
-            logging.error(f"Не удалось получить размер файла: {str(e)}")
-            progress.size_label.setText("Загружено: 0.0 / Неизвестно")
 
         # Подключаем кнопку "Отмена"
         progress.cancel_button.clicked.connect(self.download_thread.terminate)
