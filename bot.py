@@ -1181,15 +1181,17 @@ class AuthWindow(QMainWindow):
             }
         """)
 
-        # Создаём кастомный лейбл для заголовка
-        title_label = QLabel("Скачивание обновления...")
-        title_label.setStyleSheet("""
-            font-family: 'Segoe UI';
-            font-size: 14px;
-            font-weight: bold;
-            color: #FFFFFF;
-        """)
-        title_label.setAlignment(Qt.AlignCenter)
+        # Настраиваем текст прогресс-диалога
+        progress.setLabelText("Скачивание обновления...")
+        label = progress.findChild(QLabel)
+        if label:
+            label.setStyleSheet("""
+                font-family: 'Segoe UI';
+                font-size: 14px;
+                font-weight: bold;
+                color: #FFFFFF;
+            """)
+            label.setAlignment(Qt.AlignCenter)
 
         # Создаём лейблы для информации о загрузке
         size_label = QLabel("Загружено: 0.0 / 0.0 Мб")
@@ -1231,31 +1233,37 @@ class AuthWindow(QMainWindow):
                 }
             """)
 
-        # Создаём кастомный layout для размещения элементов
-        layout = QVBoxLayout()
-        layout.addWidget(title_label)
-        layout.addSpacing(10)  # Отступ между заголовком и прогресс-баром
-        layout.addWidget(progress_bar)
-        layout.addSpacing(5)  # Отступ между прогресс-баром и текстом
-        layout.addWidget(size_label)
-        layout.addSpacing(5)  # Отступ между текстами
-        layout.addWidget(speed_label)
-        layout.addSpacing(10)  # Отступ перед кнопкой
-        layout.addStretch()  # Растяжка, чтобы кнопка была внизу
+        # Добавляем кастомные лейблы в layout прогресс-диалога
+        layout = progress.layout()
+        if layout:
+            # Удаляем стандартный лейбл прогресса, чтобы заменить его
+            for i in range(layout.count()):
+                item = layout.itemAt(i)
+                if item.widget() and isinstance(item.widget(), QLabel):
+                    layout.removeWidget(item.widget())
+                    item.widget().deleteLater()
+                    break
 
-        # Устанавливаем layout в виджет прогресс-диалога
-        widget = QWidget()
-        widget.setLayout(layout)
-        progress.setLayout(layout)
+            # Добавляем наши элементы
+            layout.insertWidget(0, label)  # Заголовок
+            layout.insertSpacing(1, 10)  # Отступ
+            layout.insertWidget(2, progress_bar)  # Прогресс-бар
+            layout.insertSpacing(3, 5)  # Отступ
+            layout.insertWidget(4, size_label)  # Размер
+            layout.insertSpacing(5, 5)  # Отступ
+            layout.insertWidget(6, speed_label)  # Скорость
+            layout.insertSpacing(7, 10)  # Отступ перед кнопкой
+            layout.insertWidget(8, cancel_button)  # Кнопка
 
         # Переменные для отслеживания размера и скорости
-        total_size_mb = 0  # Будет обновляться позже
+        total_size_mb = 0
         downloaded_size_mb = 0
-        start_time = time.time()
+        last_downloaded_mb = 0
+        last_update_time = time.time()
 
         # Функция для обновления информации о загрузке
         def update_download_info(value):
-            nonlocal downloaded_size_mb, start_time
+            nonlocal downloaded_size_mb, last_downloaded_mb, last_update_time, total_size_mb
             # Обновляем процент и цвет текста
             if progress_bar:
                 if value < 50:
@@ -1290,14 +1298,21 @@ class AuthWindow(QMainWindow):
                     """)
 
             # Обновляем информацию о размере
-            downloaded_size_mb = (value / 100) * total_size_mb
-            size_label.setText(f"Загружено: {downloaded_size_mb:.1f} / {total_size_mb:.1f} Мб")
+            if total_size_mb > 0:
+                downloaded_size_mb = (value / 100) * total_size_mb
+                size_label.setText(f"Загружено: {downloaded_size_mb:.1f} / {total_size_mb:.1f} Мб")
+            else:
+                size_label.setText(f"Загружено: {downloaded_size_mb:.1f} / Неизвестно")
 
             # Обновляем скорость
-            elapsed_time = time.time() - start_time
-            if elapsed_time > 0:
-                speed_mib_s = (downloaded_size_mb / elapsed_time)  # Скорость в MiB/s
+            current_time = time.time()
+            time_diff = current_time - last_update_time
+            if time_diff >= 1.0:  # Обновляем скорость каждую секунду
+                downloaded_diff = downloaded_size_mb - last_downloaded_mb
+                speed_mib_s = downloaded_diff / time_diff
                 speed_label.setText(f"Скорость: {speed_mib_s:.1f} MiB/s")
+                last_downloaded_mb = downloaded_size_mb
+                last_update_time = current_time
 
         # Создаём директорию temp, если её нет
         os.makedirs("temp", exist_ok=True)
@@ -1311,7 +1326,7 @@ class AuthWindow(QMainWindow):
         self.download_thread.finished.connect(lambda success, error: self.on_download_finished(success, error, progress, zip_path))
         self.download_thread.start()
 
-        # Получаем размер файла (нужно получить размер из ответа сервера)
+        # Получаем размер файла
         try:
             response = requests.head(self.download_url, timeout=10)
             total_size_bytes = int(response.headers.get('content-length', 0))
