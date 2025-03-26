@@ -1135,6 +1135,7 @@ class AuthWindow(QMainWindow):
             except:
                 return False
 
+        # Закрываем окно прогресса
         progress.close()
         if not success:
             logging.error(f"Ошибка скачивания: {error}")
@@ -1157,8 +1158,8 @@ class AuthWindow(QMainWindow):
         logging.info("Ожидание завершения записи файла на диск...")
         time.sleep(2)
 
+        # Проверяем хэш архива
         logging.info("Скачивание завершено успешно, проверка хэша архива")
-        # Валидация архива
         if not self.validate_archive(zip_path, self.download_hash):
             logging.error("Валидация архива не пройдена")
             return
@@ -1186,7 +1187,6 @@ class AuthWindow(QMainWindow):
         # Проверяем содержимое архива
         try:
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                # Ищем VideoBot.exe в архиве
                 exe_in_zip = None
                 for f in zip_ref.namelist():
                     if os.path.basename(f) == "VideoBot.exe":
@@ -1216,39 +1216,36 @@ class AuthWindow(QMainWindow):
             # Проверяем наличие 7z.exe
             use_7z = False
             possible_7z_paths = [
-                "C:\\Program Files\\7-Zip\\7z.exe",   # Сначала проверяем стандартный путь
-                "C:\\Program Files (x86)\\7-Zip\\7z.exe",  # Для 32-битной версии на 64-битной системе
+                "C:\\Program Files\\7-Zip\\7z.exe",
+                "C:\\Program Files (x86)\\7-Zip\\7z.exe",
             ]
 
             for path in possible_7z_paths:
                 if os.path.exists(path):
                     try:
-                        # Проверяем, что 7z.exe работает, вызвав его с параметром --help
                         result = subprocess.run([path, "--help"], capture_output=True, text=True)
                         if result.returncode == 0:
                             logging.info(f"7z.exe найден по пути: {path}")
                             use_7z = True
-                            self._7z_path = path  # Сохраняем путь к 7z.exe
+                            self._7z_path = path
                             break
                     except Exception as e:
                         logging.warning(f"Не удалось проверить 7z.exe по пути {path}: {str(e)}")
                 else:
                     logging.debug(f"7z.exe не найден по пути: {path}")
 
+            # Формируем содержимое update.bat
             if not use_7z:
                 logging.warning("7z.exe не найден. Используем powershell для извлечения архива.")
                 bat_content = f"""@echo off
                     chcp 65001 >nul
                     echo [%date% %time%] Начало выполнения update.bat >> update.log 2>&1
 
-                    :: Создаём временный файл для подтверждения запуска
-                    echo Update script started > update_started.txt
-
                     :: Принудительное завершение VideoBot.exe
                     echo [%date% %time%] Завершение процесса VideoBot.exe >> update.log 2>&1
                     taskkill /F /IM VideoBot.exe >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
-                        echo [%date% %time%] Предупреждение: Не удалось завершить процесс VideoBot.exe >> update.log 2>&1
+                        echo [%date% %time%] Предупреждение: Процесс VideoBot.exe не найден или уже завершён >> update.log 2>&1
                     )
 
                     :: Задержка 3 секунды перед началом обновления
@@ -1291,8 +1288,8 @@ class AuthWindow(QMainWindow):
                     )
                     echo [%date% %time%] Новая версия запущена >> update.log 2>&1
 
-                    :: Задержка перед удалением файлов
-                    timeout /t 2 /nobreak >nul
+                    :: Задержка 3 секунды перед удалением файлов
+                    timeout /t 3 /nobreak >nul
 
                     :: Удаление архива
                     echo [%date% %time%] Удаление архива {zip_path} >> update.log 2>&1
@@ -1323,14 +1320,11 @@ class AuthWindow(QMainWindow):
                     chcp 65001 >nul
                     echo [%date% %time%] Начало выполнения update.bat >> update.log 2>&1
 
-                    :: Создаём временный файл для подтверждения запуска
-                    echo Update script started > update_started.txt
-
                     :: Принудительное завершение VideoBot.exe
                     echo [%date% %time%] Завершение процесса VideoBot.exe >> update.log 2>&1
                     taskkill /F /IM VideoBot.exe >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
-                        echo [%date% %time%] Предупреждение: Не удалось завершить процесс VideoBot.exe >> update.log 2>&1
+                        echo [%date% %time%] Предупреждение: Процесс VideoBot.exe не найден или уже завершён >> update.log 2>&1
                     )
 
                     :: Задержка 3 секунды перед началом обновления
@@ -1373,8 +1367,8 @@ class AuthWindow(QMainWindow):
                     )
                     echo [%date% %time%] Новая версия запущена >> update.log 2>&1
 
-                    :: Задержка перед удалением файлов
-                    timeout /t 2 /nobreak >nul
+                    :: Задержка 3 секунды перед удалением файлов
+                    timeout /t 3 /nobreak >nul
 
                     :: Удаление архива
                     echo [%date% %time%] Удаление архива {zip_path} >> update.log 2>&1
@@ -1400,6 +1394,7 @@ class AuthWindow(QMainWindow):
                     echo [%date% %time%] Скрипт обновления удалён >> update.log 2>&1
                     """
 
+            # Создаём update.bat
             logging.info(f"Создание скрипта обновления: {bat_path}")
             with open(bat_path, "w", encoding="utf-8") as bat_file:
                 bat_file.write(bat_content)
