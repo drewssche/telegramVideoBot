@@ -1292,7 +1292,7 @@ class AuthWindow(QMainWindow):
                     echo [%date% %time%] Завершение процесса VideoBot.exe >> update.log 2>&1
                     taskkill /F /IM VideoBot.exe >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
-                        echo [%date% %time%] Предупреждение: Процесс VideoBot.exe не найден или уже завершён >> update.log 2>&1
+                        echo [%date% %time%] Предупреждение: Не удалось завершить процесс VideoBot.exe >> update.log 2>&1
                     )
 
                     :: Задержка 3 секунды перед началом обновления
@@ -1335,25 +1335,16 @@ class AuthWindow(QMainWindow):
                     )
                     echo [%date% %time%] Новая версия запущена >> update.log 2>&1
 
-                    :: Задержка 5 секунд перед удалением файлов
-                    timeout /t 5 /nobreak >nul
+                    :: Задержка перед удалением файлов
+                    timeout /t 2 /nobreak >nul
 
-                    :: Удаление архива с повторными попытками
-                    set "attempts=3"
-                    :try_delete_archive
-                    echo [%date% %time%] Удаление архива {zip_path} (попытка %attempts%) >> update.log 2>&1
+                    :: Удаление архива
+                    echo [%date% %time%] Удаление архива {zip_path} >> update.log 2>&1
                     del "{zip_path}" >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
-                        set /a attempts-=1
-                        if !attempts! gtr 0 (
-                            timeout /t 2 /nobreak >nul
-                            goto :try_delete_archive
-                        )
-                        echo [%date% %time%] Предупреждение: Не удалось удалить архив после всех попыток >> update.log 2>&1
-                        goto :skip_delete_archive
+                        echo [%date% %time%] Предупреждение: Не удалось удалить архив >> update.log 2>&1
                     )
                     echo [%date% %time%] Архив удалён >> update.log 2>&1
-                    :skip_delete_archive
 
                     :: Удаление временной папки temp, если она пуста
                     echo [%date% %time%] Удаление папки temp, если она пуста >> update.log 2>&1
@@ -1380,7 +1371,7 @@ class AuthWindow(QMainWindow):
                     echo [%date% %time%] Завершение процесса VideoBot.exe >> update.log 2>&1
                     taskkill /F /IM VideoBot.exe >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
-                        echo [%date% %time%] Предупреждение: Процесс VideoBot.exe не найден или уже завершён >> update.log 2>&1
+                        echo [%date% %time%] Предупреждение: Не удалось завершить процесс VideoBot.exe >> update.log 2>&1
                     )
 
                     :: Задержка 3 секунды перед началом обновления
@@ -1423,25 +1414,16 @@ class AuthWindow(QMainWindow):
                     )
                     echo [%date% %time%] Новая версия запущена >> update.log 2>&1
 
-                    :: Задержка 5 секунд перед удалением файлов
-                    timeout /t 5 /nobreak >nul
+                    :: Задержка перед удалением файлов
+                    timeout /t 2 /nobreak >nul
 
-                    :: Удаление архива с повторными попытками
-                    set "attempts=3"
-                    :try_delete_archive
-                    echo [%date% %time%] Удаление архива {zip_path} (попытка %attempts%) >> update.log 2>&1
+                    :: Удаление архива
+                    echo [%date% %time%] Удаление архива {zip_path} >> update.log 2>&1
                     del "{zip_path}" >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
-                        set /a attempts-=1
-                        if !attempts! gtr 0 (
-                            timeout /t 2 /nobreak >nul
-                            goto :try_delete_archive
-                        )
-                        echo [%date% %time%] Предупреждение: Не удалось удалить архив после всех попыток >> update.log 2>&1
-                        goto :skip_delete_archive
+                        echo [%date% %time%] Предупреждение: Не удалось удалить архив >> update.log 2>&1
                     )
                     echo [%date% %time%] Архив удалён >> update.log 2>&1
-                    :skip_delete_archive
 
                     :: Удаление временной папки temp, если она пуста
                     echo [%date% %time%] Удаление папки temp, если она пуста >> update.log 2>&1
@@ -1480,22 +1462,15 @@ class AuthWindow(QMainWindow):
                 finally:
                     state.client = None
 
-            # Запускаем update.bat через subprocess.Popen
-            logging.info("Запуск скрипта обновления через subprocess.Popen")
+            # Запускаем update.bat через команду start с задержкой
+            logging.info("Запуск скрипта обновления через команду start")
             try:
-                # Используем subprocess.Popen с DETACHED_PROCESS для независимости
-                subprocess.Popen(
-                    ['cmd.exe', '/c', bat_path],
-                    cwd=current_dir,
-                    creationflags=subprocess.DETACHED_PROCESS,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
-                )
-                logging.info("Скрипт обновления успешно запущен через subprocess.Popen")
-                # Даём небольшую задержку перед закрытием программы
-                time.sleep(1)
+                # Используем команду start с ping для создания задержки 3 секунды
+                command = f'start "" cmd /c "ping 127.0.0.1 -n 4 > nul & "{bat_path}""'
+                os.system(command)
+                logging.info("Скрипт обновления успешно запущен через команду start")
             except Exception as e:
-                logging.error(f"Не удалось запустить update.bat через subprocess.Popen: {str(e)}")
+                logging.error(f"Не удалось запустить update.bat через команду start: {str(e)}")
                 self.show_notification(
                     f"Не удалось запустить скрипт обновления: {str(e)}",
                     "error"
