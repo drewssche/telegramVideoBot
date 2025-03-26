@@ -1475,12 +1475,15 @@ class AuthWindow(QMainWindow):
 
                     :: Запуск новой версии
                     echo [%date% %time%] Запуск новой версии VideoBot.exe >> update.log 2>&1
-                    start "" "VideoBot.exe" >> update.log 2>&1
+                    start /B "" "VideoBot.exe" >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
                         echo [%date% %time%] Ошибка: Не удалось запустить новую версию >> update.log 2>&1
                         exit /b 1
                     )
                     echo [%date% %time%] Новая версия запущена >> update.log 2>&1
+
+                    :: Задержка 2 секунды, чтобы дать VideoBot.exe время на запуск
+                    timeout /t 2 /nobreak >nul
 
                     :: Удаление bat-файла
                     echo [%date% %time%] Удаление скрипта обновления update.bat >> update.log 2>&1
@@ -1533,12 +1536,15 @@ class AuthWindow(QMainWindow):
 
                     :: Запуск новой версии
                     echo [%date% %time%] Запуск новой версии VideoBot.exe >> update.log 2>&1
-                    start "" "VideoBot.exe" >> update.log 2>&1
+                    start /B "" "VideoBot.exe" >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
                         echo [%date% %time%] Ошибка: Не удалось запустить новую версию >> update.log 2>&1
                         exit /b 1
                     )
                     echo [%date% %time%] Новая версия запущена >> update.log 2>&1
+
+                    :: Задержка 2 секунды, чтобы дать VideoBot.exe время на запуск
+                    timeout /t 2 /nobreak >nul
 
                     :: Удаление bat-файла
                     echo [%date% %time%] Удаление скрипта обновления update.bat >> update.log 2>&1
