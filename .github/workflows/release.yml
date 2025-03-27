@@ -95,8 +95,8 @@ jobs:
           # Убеждаемся, что переносы строк строго \n (LF)
           $changelog = $changelog -replace "`r`n", "`n"
           # Записываем в $env:GITHUB_OUTPUT с кодировкой UTF-8 без BOM
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "VERSION=$version`n" -Encoding ([System.Text.UTF8Encoding]::new($false))
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "CHANGELOG=- $changelog`n" -Encoding ([System.Text.UTF8Encoding]::new($false))
+          [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "VERSION=$version`n", [System.Text.UTF8Encoding]::new($false))
+          [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "CHANGELOG=- $changelog`n", [System.Text.UTF8Encoding]::new($false))
         shell: powershell
 
       # Минимизированная очистка перед сборкой
