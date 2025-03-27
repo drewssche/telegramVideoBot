@@ -84,11 +84,11 @@ jobs:
           type bot_py_hash.txt
         shell: cmd
 
-      # Извлечение версии и changelog (на Python)
+      # Извлечение версии и changelog (на Python, однострочный)
       - name: Get version and changelog from version.json
         id: version
         run: |
-          python -c "import json; with open('version.json', 'r', encoding='utf-8') as f: data = json.load(f); print(f'VERSION={data[\"version\"]}'); print(f'CHANGELOG=- ' + '\n- '.join(data['changelog']))" >> $GITHUB_OUTPUT
+          python -c "import json; data = json.load(open('version.json', 'r', encoding='utf-8')); print(f'VERSION={data[\"version\"]}'); print(f'CHANGELOG=- ' + '\n- '.join(data['changelog']))" >> $GITHUB_OUTPUT
         shell: cmd
 
       # Минимизированная очистка перед сборкой
@@ -155,7 +155,7 @@ jobs:
             **Changelog:** 📝
             ${{ steps.version.outputs.CHANGELOG }}|-
             **Downloads:**
-            - **Release**: VideoBot_v${{ steps.version.outputs.VERSION }}.zip
+            - **Release**: `VideoBot_v${{ steps.version.outputs.VERSION }}.zip`
             **Requirements:**
             - FFmpeg: [Download](https://ffmpeg.org/download.html)
             - Visual C++ Redistributable: [Download](https://aka.ms/vs/17/release/vc_redist.x64.exe)
