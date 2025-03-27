@@ -156,7 +156,7 @@ jobs:
           body: |
             **Version ${{ steps.version.outputs.VERSION }}** 🚀
             **Changelog:** 📝
-            ${{ steps.version.outputs.CHANGELOG }}|-
+            ${{ steps.version.outputs.CHANGELOG }}
             **Downloads:**
             - **Release**: `VideoBot_v${{ steps.version.outputs.VERSION }}.zip`
             **Requirements:**
