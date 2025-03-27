@@ -90,32 +90,19 @@ jobs:
         run: |
           $json = Get-Content -Path "version.json" -Raw -Encoding UTF8 | ConvertFrom-Json
           $version = $json.version
+          # Объединяем changelog с переносами строк \n и префиксом "- "
           $changelog = $json.changelog -join "`n- "
-          [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "VERSION=$version`n", [System.Text.Encoding]::UTF8)
-          [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "CHANGELOG=- $changelog`n", [System.Text.Encoding]::UTF8)
+          # Убеждаемся, что переносы строк строго \n (LF)
+          $changelog = $changelog -replace "`r`n", "`n"
+          # Записываем в $env:GITHUB_OUTPUT с кодировкой UTF-8 без BOM
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "VERSION=$version`n" -Encoding ([System.Text.UTF8Encoding]::new($false))
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "CHANGELOG=- $changelog`n" -Encoding ([System.Text.UTF8Encoding]::new($false))
         shell: powershell
 
-      # Проверка, является ли релиз крупным
-      - name: Determine if this is a major release
-        id: major_release
+      # Минимизированная очистка перед сборкой
+      - name: Clean dist directory
         run: |
-          $version = "${{ steps.version.outputs.VERSION }}"
-          if ($version -match '^\d+\.0\.0$') {
-            echo "IS_MAJOR=true" >> $env:GITHUB_OUTPUT
-          } else {
-            echo "IS_MAJOR=false" >> $env:GITHUB_OUTPUT
-          }
-        shell: powershell
-
-      # Полная очистка перед сборкой
-      - name: Clean build directory and .pyc files
-        run: |
-          if exist "VideoBot" rmdir /s /q "VideoBot"
           if exist "dist" rmdir /s /q "dist"
-          if exist "build" rmdir /s /q "build"
-          if exist "%TEMP%\cx_freeze" rmdir /s /q "%TEMP%\cx_freeze"
-          del /s /q *.pyc
-          if exist "__pycache__" rmdir /s /q "__pycache__"
           mkdir "dist"
         shell: cmd
 
@@ -150,21 +137,6 @@ jobs:
         run: |
           certutil -hashfile dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip SHA256 > dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip.sha256
         shell: cmd
-
-      # Обновление last_full_release_url для крупного релиза
-      - name: Update last_full_release_url if major release
-        if: steps.major_release.outputs.IS_MAJOR == 'true'
-        run: |
-          $ReleaseUrl = "https://github.com/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.VERSION }}"
-          $json = Get-Content -Path "version.json" -Raw -Encoding UTF8 | ConvertFrom-Json
-          $json.last_full_release_url = $ReleaseUrl
-          $json | ConvertTo-Json -Depth 10 | Set-Content -Path "version.json" -Encoding UTF8
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add version.json
-          git commit -m "Update last_full_release_url for v${{ steps.version.outputs.VERSION }}"
-          git push
-        shell: powershell
 
       # Проверка существования тега
       - name: Check if tag exists
