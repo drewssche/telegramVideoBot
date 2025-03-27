@@ -1,7 +1,8 @@
 {
-    "version": "2.0.28",
+    "version": "2.0.29",
     "changelog": [
-        "холостая проверка обновления"
+        "добавлено отображение ченжлога при нажатии на обновление",
+        "переработано окно ченжлога"
     ],
 "last_full_release_url": "https://github.com/drewssche/telegramVideoBot/releases/tag/v1.0.0"
 }

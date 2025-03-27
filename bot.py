@@ -13,7 +13,7 @@ import contextlib
 from datetime import datetime
 from telethon import TelegramClient, events
 from telethon.tl.types import User, Chat, Channel
-from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QProgressDialog,
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QProgressDialog, QTextBrowser,
                                QLabel, QLineEdit, QPushButton, QDialog, QProgressBar, QMessageBox, QFileDialog,
                                QListWidget, QListWidgetItem, QRadioButton, QGroupBox, QTabWidget, QFrame, QGraphicsDropShadowEffect)
 from PySide6.QtCore import Qt, QTimer, QRegularExpression, Signal, QPropertyAnimation, QRect, QUrl, QThread
@@ -786,7 +786,6 @@ class AboutDialog(QDialog):
             "<b>VideoBot</b><br><br>"
             f"Версия: {CURRENT_VERSION}<br>"
             "Разработчик: Drews<br><br>"
-            # "Поддержите проект: <a href='https://donate.example.com' style='color: #FFFFFF'>Донат</a><br>"
             "Ссылка на исходную версию: <a href='https://github.com/drewssche/telegramVideoBot/releases/download/v1.0.0/VideoBot.zip' style='color: #FFFFFF'>Здесь</a><br><br>"
             "Связь:<br>"
             "<a href='https://t.me/muscle_junkie' style='color: #FFFFFF'>Telegram</a><br>"
@@ -796,8 +795,8 @@ class AboutDialog(QDialog):
         info_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(info_label)
 
-        # Кнопка "Чейнджлог"
-        changelog_button = QPushButton("Чейнджлог")
+        # Кнопка "Чейнджлог" с эмодзи
+        changelog_button = QPushButton("📜 Чейнджлог")
         changelog_button.setFixedWidth(180)  # Фиксированная ширина, как в AuthWindow
         changelog_button.setStyleSheet("""
             QPushButton {
@@ -824,8 +823,8 @@ class AboutDialog(QDialog):
             version = release_data["tag_name"].lstrip("v")  # Например, "1.0.2"
             changelog = release_data.get("body", "Чейнджлог отсутствует")
 
-            # Показываем чейнджлог
-            changelog_dialog = ChangelogDialog(changelog, version, self)
+            # Показываем чейнджлог без кнопки "Загрузить"
+            changelog_dialog = ChangelogDialog(changelog, version, show_download_button=False, parent=self)
             changelog_dialog.exec()
         except requests.exceptions.ConnectionError:
             logging.error("Ошибка подключения к интернету при запросе чейнджлога")
@@ -838,60 +837,144 @@ class AboutDialog(QDialog):
             QMessageBox.critical(self, "Ошибка", f"Не удалось показать чейнджлог: {str(e)}.")
 
 class ChangelogDialog(QDialog):
-    def __init__(self, changelog, version, parent=None):
+    def __init__(self, changelog, version, show_download_button=True, parent=None):
         super().__init__(parent)
         self.setWindowTitle(f"Что нового в версии {version}")
-        self.setFixedSize(400, 300)
+        self.setFixedSize(450, 400)
         screen = QApplication.primaryScreen().geometry()
         self.move((screen.width() - self.width()) // 2, (screen.height() - self.height()) // 2)
         self.setStyleSheet("background-color: #2F2F2F; color: #FFFFFF;")
+        self.setWindowModality(Qt.WindowModal)  # Делаем окно модальным
 
         # Установка иконки для окна
         icon_path = "icons/256.ico"
         self.setWindowIcon(QIcon(icon_path))
 
+        # Создаём layout
         layout = QVBoxLayout(self)
+        layout.setSpacing(5)
 
-        # Создаём QListWidget для отображения чейнджлога
-        self.changelog_list = QListWidget()
-        self.changelog_list.setStyleSheet("""
-            QListWidget {
-                background-color: #404040;
-                color: #FFFFFF;
-                border: 1px solid #505050;
+        # Заголовок
+        title_label = QLabel(f"Что нового в версии {version}")
+        title_label.setStyleSheet("""
+            font-family: 'Segoe UI';
+            font-size: 14px;
+            font-weight: bold;
+            color: #FFFFFF;
+        """)
+        title_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title_label)
+
+        # Текст чейнджлога
+        changelog_text = self.format_changelog(changelog)
+        self.changelog_display = QTextBrowser()
+        self.changelog_display.setReadOnly(True)
+        self.changelog_display.setStyleSheet("""
+            QTextBrowser {
+                background-color: #2F2F2F;
+                color: #D3D3D3;
+                font-family: 'Segoe UI';
+                font-size: 12px;
+                border: none;
             }
-            QListWidget::item {
-                padding: 5px;
+            QTextBrowser a {
+                color: #FFFFFF;
+                text-decoration: underline;
+            }
+            QTextBrowser strong {
+                font-weight: bold;
+            }
+            QTextBrowser code {
+                font-family: 'Courier New', monospace;
+            }
+            QTextBrowser p {
+                margin: 0;  /* Убираем отступы для всех строк */
+                padding: 0;
             }
         """)
-        self.changelog_list.setWordWrap(True)  # Включаем перенос текста
-        layout.addWidget(self.changelog_list)
+        self.changelog_display.setHtml(changelog_text)  # Используем HTML
+        self.changelog_display.setOpenExternalLinks(False)  # Отключаем автоматическое открытие ссылок
+        # Подключаем обработчик клика по ссылке
+        self.changelog_display.anchorClicked.connect(self.open_link)
+        layout.addWidget(self.changelog_display)
 
-        # Обрабатываем чейнджлог
-        self.populate_changelog(changelog)
+        # Кнопка "📥 Загрузить" (если нужно)
+        if show_download_button:
+            self.download_button = QPushButton("📥 Загрузить")
+            self.download_button.setFixedWidth(180)
+            self.download_button.setStyleSheet("""
+                QPushButton {
+                    background-color: #505050;
+                    color: #FFFFFF;
+                    font-family: 'Segoe UI';
+                    font-size: 12px;
+                    padding: 5px;
+                    border: none;
+                }
+                QPushButton:hover {
+                    background-color: #606060;
+                }
+            """)
+            self.download_button.clicked.connect(self.accept)  # Закрываем с кодом принятия
+            layout.addWidget(self.download_button, alignment=Qt.AlignCenter)
 
-        self.setLayout(layout)
+    def format_changelog(self, changelog):
+        """
+        Преобразует текст чейнджлога в HTML, используя <p> для всех строк,
+        добавляя символы • для списков и отступы для вложенных списков.
+        """
+        if not changelog or changelog == "Чейнджлог отсутствует":
+            return "<p style='color: #D3D3D3; font-family: \"Segoe UI\"; font-size: 12px;'>Изменения отсутствуют.</p>"
 
-    def populate_changelog(self, changelog):
-        # Если changelog — это список (например, из version.json)
-        if isinstance(changelog, list):
-            for item in changelog:
-                if item.strip():  # Пропускаем пустые строки
-                    list_item = QListWidgetItem(f"• {item}")
-                    self.changelog_list.addItem(list_item)
-        # Если changelog — это строка (например, из GitHub API)
-        elif isinstance(changelog, str):
-            # Разделяем строку на строки и убираем пустые
-            lines = [line.strip() for line in changelog.split("\n") if line.strip()]
-            for line in lines:
-                # Убираем возможные символы начала строки (например, "-", "*", "#") и лишние пробелы
-                cleaned_line = re.sub(r'^[-*#\s]+', '', line).strip()
-                if cleaned_line:  # Пропускаем пустые строки после очистки
-                    list_item = QListWidgetItem(f"• {cleaned_line}")
-                    self.changelog_list.addItem(list_item)
-        # Если changelog пустой или некорректный
-        if self.changelog_list.count() == 0:
-            self.changelog_list.addItem("Чейнджлог отсутствует")
+        lines = changelog.splitlines()
+        html_lines = []
+        current_indent_level = 0  # Уровень вложенности
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Определяем уровень вложенности по количеству пробелов в начале строки
+            indent = len(line) - len(line.lstrip())
+            indent_level = indent // 2  # Каждый уровень вложенности — 2 пробела
+            line = line.lstrip()
+
+            # Стилизуем ссылки через HTML
+            line = re.sub(
+                r'\[(.*?)\]\((.*?)\)',
+                r'<a href="\2" style="color: #FFFFFF; text-decoration: underline;">\1</a>',
+                line
+            )
+
+            # Преобразуем Markdown-форматирование в HTML
+            line = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', line)
+            line = re.sub(r'`(.*?)`', r'<code>\1</code>', line)
+
+            # Если строка начинается с - или *, это пункт списка
+            if line.startswith("- ") or line.startswith("* "):
+                content = line[2:].strip()
+
+                # Проверяем, есть ли в строке только заголовок (например, <strong>Downloads:</strong>)
+                if content.startswith("<strong>") and content.endswith("</strong>"):
+                    # Это заголовок, добавляем его без маркера
+                    html_lines.append(f"<p style='color: #D3D3D3; font-family: \"Segoe UI\"; font-size: 12px;'>{content}</p>")
+                else:
+                    # Обычный пункт списка, добавляем с маркером •
+                    indent_px = indent_level * 15  # 15px отступ для каждого уровня вложенности
+                    html_lines.append(f"<p style='color: #D3D3D3; font-family: \"Segoe UI\"; font-size: 12px; margin-left: {indent_px}px;'>• {content}</p>")
+            else:
+                # Если строка не начинается с - или *, это заголовок или обычный текст
+                html_lines.append(f"<p style='color: #D3D3D3; font-family: \"Segoe UI\"; font-size: 12px;'>{line}</p>")
+
+        if not html_lines:
+            return "<p style='color: #D3D3D3; font-family: \"Segoe UI\"; font-size: 12px;'>Изменения отсутствуют.</p>"
+
+        return "".join(html_lines)
+
+    def open_link(self, url):
+        """Обработчик клика по ссылке — открывает URL в браузере."""
+        QDesktopServices.openUrl(url)
 
 class UpdateDialog(QDialog):
     def __init__(self, parent=None):
@@ -1310,6 +1393,11 @@ class AuthWindow(QMainWindow):
             )
             return
 
+        # Показываем чейнджлог перед началом обновления
+        if not self.show_changelog_if_needed():
+            logging.info("Обновление отменено пользователем (через закрытие окна чейнджлога)")
+            return
+
         # Логируем информацию об обновлении
         logging.info(f"Начало обновления до версии {self.new_version}")
         logging.info(f"URL для скачивания: {self.download_url}")
@@ -1702,11 +1790,13 @@ class AuthWindow(QMainWindow):
         try:
             if hasattr(self, "changelog") and hasattr(self, "new_version"):
                 if self.compare_versions(self.new_version, CURRENT_VERSION) > 0:
-                    changelog_dialog = ChangelogDialog(self.changelog, self.new_version, self)
-                    changelog_dialog.exec()
+                    changelog_dialog = ChangelogDialog(self.changelog, self.new_version, show_download_button=True, parent=self)
+                    return changelog_dialog.exec_() == QDialog.Accepted  # True, если нажата "📥 Загрузить"
+            return False  # Если чейнджлог не показан, считаем, что обновление отменено
         except Exception as e:
             logging.error(f"Неизвестная ошибка при показе чейнджлога: {str(e)}")
             QMessageBox.critical(self, "Ошибка", f"Не удалось показать чейнджлог: {str(e)}.")
+            return False
 
     def check_write_permissions(self):
         """Проверяет права на запись в текущую директорию."""
