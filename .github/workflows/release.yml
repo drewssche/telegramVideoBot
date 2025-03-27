@@ -137,16 +137,25 @@ jobs:
         run: |
           git fetch --tags
           $tag_exists = git tag -l "v${{ steps.version.outputs.VERSION }}"
+          echo "Checking for tag v${{ steps.version.outputs.VERSION }}"
           if ($tag_exists) {
+            echo "Tag exists"
             echo "result=true" >> $env:GITHUB_OUTPUT
           } else {
+            echo "Tag does not exist"
             echo "result=false" >> $env:GITHUB_OUTPUT
           }
         shell: powershell
 
       # Создание релиза и загрузка артефактов
       - name: Create Release and Upload Assets
-        if: steps.check_tag.outputs.result == 'false'
+        run: |
+          echo "Creating release for version ${{ steps.version.outputs.VERSION }}"
+          echo "Changelog content:"
+          echo "${{ steps.version.outputs.CHANGELOG }}"
+        shell: cmd
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.VERSION }}
