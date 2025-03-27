@@ -866,7 +866,7 @@ class ChangelogDialog(QDialog):
         layout.addWidget(title_label)
 
         # Текст чейнджлога
-        changelog_text = self.format_changelog(changelog)
+        self.changelog_html = self.format_changelog(changelog)  # Сохраняем HTML-контент
         self.changelog_display = QTextBrowser()
         self.changelog_display.setReadOnly(True)
         self.changelog_display.setStyleSheet("""
@@ -892,7 +892,7 @@ class ChangelogDialog(QDialog):
                 padding: 0;
             }
         """)
-        self.changelog_display.setHtml(changelog_text)  # Используем HTML
+        self.changelog_display.setHtml(self.changelog_html)  # Устанавливаем HTML
         self.changelog_display.setOpenExternalLinks(False)  # Отключаем автоматическое открытие ссылок
         # Подключаем обработчик клика по ссылке
         self.changelog_display.anchorClicked.connect(self.open_link)
@@ -973,8 +973,11 @@ class ChangelogDialog(QDialog):
         return "".join(html_lines)
 
     def open_link(self, url):
-        """Обработчик клика по ссылке — открывает URL в браузере."""
+        """Обработчик клика по ссылке — открывает URL в браузере и предотвращает очистку содержимого."""
+        # Открываем ссылку в браузере
         QDesktopServices.openUrl(url)
+        # Восстанавливаем содержимое, если QTextBrowser его очистил
+        self.changelog_display.setHtml(self.changelog_html)
 
 class UpdateDialog(QDialog):
     def __init__(self, parent=None):
