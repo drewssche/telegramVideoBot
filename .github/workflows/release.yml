@@ -136,10 +136,11 @@ jobs:
         run: |
           git fetch --tags
           $tag_exists = git tag -l "v${{ steps.version.outputs.VERSION }}"
+          Write-Host "Tag v${{ steps.version.outputs.VERSION }} exists: $tag_exists"
           if ($tag_exists) {
             echo "result=true" >> $env:GITHUB_OUTPUT
           } else {
-            echo "result=false" >> $envGITHUB_OUTPUT
+            echo "result=false" >> $env:GITHUB_OUTPUT
           }
         shell: powershell
 

@@ -6,10 +6,11 @@ with open('version.json', 'r', encoding='utf-8') as f:
     data = json.load(f)
 
 version = data['version']
-# Объединяем changelog с переносами строк \n и префиксом "- "
 changelog = '- ' + '\n- '.join(data['changelog'])
 
-# Для записи в $GITHUB_OUTPUT используем многострочный синтаксис
+print(f"Extracted version: {version}")
+print(f"Changelog:\n{changelog}")
+
 with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
     f.write(f'VERSION={version}\n')
     f.write('CHANGELOG<<EOF\n')
