@@ -84,9 +84,11 @@ jobs:
           type bot_py_hash.txt
         shell: cmd
 
-      # Извлечение версии и changelog (на Python, однострочный)
+      # Извлечение версии и changelog (на Python, с PYTHONUTF8=1)
       - name: Get version and changelog from version.json
         id: version
+        env:
+          PYTHONUTF8: 1
         run: |
           python -c "import json; data = json.load(open('version.json', 'r', encoding='utf-8')); print(f'VERSION={data[\"version\"]}'); print(f'CHANGELOG=- ' + '\n- '.join(data['changelog']))" >> $GITHUB_OUTPUT
         shell: cmd
@@ -130,7 +132,7 @@ jobs:
           certutil -hashfile dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip SHA256 > dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip.sha256
         shell: cmd
 
-      # Проверка существования тега
+      # Проверка существ Wования тега
       - name: Check if tag exists
         id: check_tag
         run: |
