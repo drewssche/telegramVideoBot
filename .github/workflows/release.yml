@@ -88,7 +88,8 @@ jobs:
       - name: Get version and changelog from version.json
         id: version
         run: |
-          python -c "import json; f=open('version.json','r',encoding='utf-8'); d=json.load(f); print('VERSION='+d['version']); print('CHANGELOG=- '+'\n- '.join(d['changelog']))" >> $GITHUB_OUTPUT
+          python -c "import json, sys; f=open('version.json','r',encoding='utf-8'); d=json.load(f); sys.stdout.reconfigure(encoding='utf-8'); print('VERSION='+d['version']); print('CHANGELOG=- '+'\n- '.join(d['changelog']))" > version_info.txt
+          type version_info.txt >> $GITHUB_OUTPUT
         shell: cmd
 
       # Минимизированная очистка перед сборкой
