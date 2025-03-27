@@ -139,7 +139,7 @@ jobs:
           if ($tag_exists) {
             echo "result=true" >> $env:GITHUB_OUTPUT
           } else {
-            echo "result=false" >> $env:GITHUB_OUTPUT
+            echo "result=false" >> $envGITHUB_OUTPUT
           }
         shell: powershell
 
