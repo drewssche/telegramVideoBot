@@ -88,7 +88,7 @@ jobs:
       - name: Get version and changelog from version.json
         id: version
         run: |
-          python -c "import json, sys; f=open('version.json','r',encoding='utf-8'); d=json.load(f); sys.stdout.reconfigure(encoding='utf-8'); print('VERSION='+d['version']); print('CHANGELOG='+'\n'.join('- '+item for item in d['changelog']))" > version_info.txt
+          python -c "import json, sys; f=open('version.json','r',encoding='utf-8'); d=json.load(f); sys.stdout.reconfigure(encoding='utf-8'); print('VERSION='+d['version']); print('CHANGELOG='+'\n'.join('- '+item for item in d['changelog']).replace('\n', '%0A'))" > version_info.txt
           type version_info.txt >> $GITHUB_OUTPUT
         shell: cmd
 
@@ -154,7 +154,7 @@ jobs:
           body: |
             **Version ${{ steps.version.outputs.VERSION }}** 🚀
             **Changelog:** 📝
-            ${{ steps.version.outputs.CHANGELOG }}|-
+            ${{ steps.version.outputs.CHANGELOG }}
             **Downloads:**
             - **Release**: `VideoBot_v${{ steps.version.outputs.VERSION }}.zip`
             **Requirements:**
