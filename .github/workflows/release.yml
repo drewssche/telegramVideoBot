@@ -87,6 +87,8 @@ jobs:
       # Извлечение версии и changelog (на Python, через отдельный скрипт)
       - name: Get version and changelog from version.json
         id: version
+        env:
+          PYTHONUTF8: 1
         run: |
           python get_version.py
         shell: cmd
