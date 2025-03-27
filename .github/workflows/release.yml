@@ -84,22 +84,12 @@ jobs:
           type bot_py_hash.txt
         shell: cmd
 
-      # Извлечение версии и changelog
+      # Извлечение версии и changelog (на Python)
       - name: Get version and changelog from version.json
         id: version
         run: |
-          $json = Get-Content -Path "version.json" -Raw -Encoding UTF8 | ConvertFrom-Json
-          $version = $json.version
-          # Объединяем changelog с переносами строк \n и префиксом "- "
-          $changelog = $json.changelog -join "`n- "
-          # Убеждаемся, что переносы строк строго \n (LF)
-          $changelog = $changelog -replace "`r`n", "`n"
-          # Кодируем переносы строк как %0A
-          $encodedChangelog = $changelog -replace "`n", "%0A"
-          # Записываем в $env:GITHUB_OUTPUT с кодировкой UTF-8 без BOM
-          [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "VERSION=$version`n", [System.Text.UTF8Encoding]::new($false))
-          [System.IO.File]::AppendAllText($env:GITHUB_OUTPUT, "CHANGELOG=- $encodedChangelog`n", [System.Text.UTF8Encoding]::new($false))
-        shell: powershell
+          python -c "import json; with open('version.json', 'r', encoding='utf-8') as f: data = json.load(f); print(f'VERSION={data[\"version\"]}'); print(f'CHANGELOG=- ' + '\n- '.join(data['changelog']))" >> $GITHUB_OUTPUT
+        shell: cmd
 
       # Минимизированная очистка перед сборкой
       - name: Clean dist directory
@@ -163,7 +153,7 @@ jobs:
           body: |
             **Version ${{ steps.version.outputs.VERSION }}** 🚀
             **Changelog:** 📝
-            ${{ steps.version.outputs.CHANGELOG }}
+            ${{ steps.version.outputs.CHANGELOG }}|-
             **Downloads:**
             - **Release**: `VideoBot_v${{ steps.version.outputs.VERSION }}.zip`
             **Requirements:**
