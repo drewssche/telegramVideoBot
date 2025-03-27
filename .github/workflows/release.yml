@@ -88,10 +88,7 @@ jobs:
       - name: Get version and changelog from version.json
         id: version
         run: |
-          python -c "import json, sys; f=open('version.json','r',encoding='utf-8'); d=json.load(f); sys.stdout.reconfigure(encoding='utf-8'); print('VERSION='+d['version']); print('CHANGELOG='+'\n'.join('- '+item for item in d['changelog']).replace('\n', '%0A'))" > version_info.txt
-          type version_info.txt >> $GITHUB_OUTPUT
-          echo "VERSION=$(python -c "import json; f=open('version.json','r',encoding='utf-8'); d=json.load(f); print(d['version'])")" >> $GITHUB_ENV
-          echo "CHANGELOG=$(python -c "import json; f=open('version.json','r',encoding='utf-8'); d=json.load(f); print('\n'.join('- '+item for item in d['changelog']).replace('\n', '%0A'))")" >> $GITHUB_ENV
+          python -c "import json; with open('version.json', 'r', encoding='utf-8') as f: data = json.load(f); print(f'VERSION={data[\"version\"]}'); print(f'CHANGELOG=- ' + '\n- '.join(data['changelog']))" >> $GITHUB_OUTPUT
         shell: cmd
 
       # Минимизированная очистка перед сборкой
@@ -121,16 +118,16 @@ jobs:
           dir VideoBot
           REM Переходим в папку VideoBot и архивируем её содержимое без самой папки
           cd VideoBot
-          7z a -tzip ..\dist\VideoBot_v${{ env.VERSION }}.zip *
+          7z a -tzip ..\dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip *
           cd ..
           REM Проверяем содержимое архива
-          7z l dist\VideoBot_v${{ env.VERSION }}.zip
+          7z l dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip
         shell: cmd
 
       # Вычисление хэша для релиза
       - name: Generate SHA256 for Release
         run: |
-          certutil -hashfile dist\VideoBot_v${{ env.VERSION }}.zip SHA256 > dist\VideoBot_v${{ env.VERSION }}.zip.sha256
+          certutil -hashfile dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip SHA256 > dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip.sha256
         shell: cmd
 
       # Проверка существования тега
@@ -138,42 +135,33 @@ jobs:
         id: check_tag
         run: |
           git fetch --tags
-          $tag_exists = git tag -l "v${{ env.VERSION }}"
-          echo "Checking for tag v${{ env.VERSION }}"
+          $tag_exists = git tag -l "v${{ steps.version.outputs.VERSION }}"
           if ($tag_exists) {
-            echo "Tag exists"
             echo "result=true" >> $env:GITHUB_OUTPUT
           } else {
-            echo "Tag does not exist"
             echo "result=false" >> $env:GITHUB_OUTPUT
           }
         shell: powershell
 
       # Создание релиза и загрузка артефактов
       - name: Create Release and Upload Assets
-        run: |
-          echo "Creating release for version ${{ env.VERSION }}"
-          echo "Changelog content:"
-          echo "${{ env.CHANGELOG }}"
-        shell: cmd
-
-      - name: Create GitHub Release
+        if: steps.check_tag.outputs.result == 'false'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ env.VERSION }}
-          name: Release v${{ env.VERSION }}
+          tag_name: v${{ steps.version.outputs.VERSION }}
+          name: Release v${{ steps.version.outputs.VERSION }}
           body: |
-            **Version ${{ env.VERSION }}** 🚀
+            **Version ${{ steps.version.outputs.VERSION }}** 🚀
             **Changelog:** 📝
-            ${{ env.CHANGELOG }}
+            ${{ steps.version.outputs.CHANGELOG }}|-
             **Downloads:**
-            - **Release**: `VideoBot_v${{ env.VERSION }}.zip`
+            - **Release**: VideoBot_v${{ steps.version.outputs.VERSION }}.zip
             **Requirements:**
             - FFmpeg: [Download](https://ffmpeg.org/download.html)
             - Visual C++ Redistributable: [Download](https://aka.ms/vs/17/release/vc_redist.x64.exe)
             **Note:** Extract the ZIP into a clean VideoBot folder to install or update.
           files: |
-            dist/VideoBot_v${{ env.VERSION }}.zip
-            dist/VideoBot_v${{ env.VERSION }}.zip.sha256
+            dist/VideoBot_v${{ steps.version.outputs.VERSION }}.zip
+            dist/VideoBot_v${{ steps.version.outputs.VERSION }}.zip.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
