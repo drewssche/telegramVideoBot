@@ -425,10 +425,31 @@ async def update_progress_bar_video(chat_id, message_id, url, platform, download
     return True
 
 async def process_video(chat_id, message_id, url, platform, max_duration, message, sender_info):
-    progress_msg = await state.client.send_message(chat_id, f"Обрабатываю ссылку {url}\n{platform}\n[{' ' * 10}] 0%", reply_to=message_id)
+    # Добавляем рандомную задержку от 0.5 до 2 секунд
+    import random
+    await asyncio.sleep(random.uniform(0.5, 2.0))
+
+    # Проверяем, отправлено ли сообщение текущим пользователем
+    can_edit = message.sender_id == state.current_user_id
+    if can_edit:
+        # Если можем редактировать, используем исходное сообщение
+        progress_msg = message
+        await state.client.edit_message(
+            chat_id,
+            message_id,
+            f"Обрабатываю ссылку {url}\n{platform}\n[{' ' * 10}] 0%\n[BotSignature:{state.bot_signature_id}]"
+        )
+    else:
+        # Если не можем редактировать, отправляем новое сообщение
+        progress_msg = await state.client.send_message(
+            chat_id,
+            f"Обрабатываю ссылку {url}\n{platform}\n[{' ' * 10}] 0%\n[BotSignature:{state.bot_signature_id}]",
+            reply_to=message_id
+        )
+
     last_percentage = [0]
     last_update_time = [time.time()]
-    last_message_text = [f"Обрабатываю ссылку {url}\n{platform}\n[{' ' * 10}] 0%"]  # Инициализация последнего текста
+    last_message_text = [f"Обрабатываю ссылку {url}\n{platform}\n[{' ' * 10}] 0%\n[BotSignature:{state.bot_signature_id}]"]
     temp_file = None
     final_file = None
 
@@ -510,16 +531,12 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
             info = ydl.extract_info(url, download=False)
             duration = info.get('duration', 0)
             if max_duration and duration > max_duration:
-                await state.client.delete_messages(chat_id, progress_msg.id)
+                await state.client.edit_message(
+                    chat_id,
+                    progress_msg.id,
+                    f"Видео {url} отклонено: длительность {duration} сек превышает лимит {max_duration} сек\n[BotSignature:{state.bot_signature_id}]"
+                )
                 logging.info(f"Видео {url} отклонено: длительность {duration} сек превышает лимит {max_duration} сек {sender_info} в чат '{chat_title}' (тип: {chat_type})")
-                if state.responses_enabled:  # Проверяем состояние переключателя
-                    responses = get_responses()
-                    if responses:
-                        response_text = random.choice([r[1] for r in responses])
-                        await asyncio.sleep(1)  # Добавляем задержку 1 секунда
-                        signature = f"[BotSignature:{state.bot_signature_id}]"  # Добавляем сигнатуру
-                        await state.client.send_message(chat_id, f"{response_text} {signature}", reply_to=message_id)
-                        logging.info(f"Отправлен ответ '{response_text}' {sender_info} в чат '{chat_title}' (тип: {chat_type})")
                 return False
 
         # Скачиваем видео
@@ -544,7 +561,7 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
             height = info.get('height', 854)  # По умолчанию 854, если не указано
             duration = info.get('duration', 0)  # Длительность видео в секундах
 
-            # Отправляем видео с атрибутами для стриминга
+            # Отправляем видео с атрибутами для стриминга, редактируя то же сообщение
             from telethon.tl.types import DocumentAttributeVideo
             attributes = [
                 DocumentAttributeVideo(
@@ -556,32 +573,28 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
             ]
             with open(final_file, 'rb') as video:
                 logging.info(f"Отправка видео {url} ({platform}) {sender_info} в чат '{chat_title}' (тип: {chat_type})")
-                await state.client.send_file(
+                # Редактируем сообщение с прогресс-баром, добавляя видео
+                await state.client.edit_message(
                     chat_id,
-                    video,
-                    reply_to=message_id,
-                    caption=platform,
+                    progress_msg.id,
+                    f"{platform}\n[BotSignature:{state.bot_signature_id}]",
+                    file=video,
                     attributes=attributes,
                     force_document=False
                 )
-            await state.client.delete_messages(chat_id, progress_msg.id)
-            if state.responses_enabled:  # Проверяем состояние переключателя
-                responses = get_responses()
-                if responses:
-                    response_text = random.choice([r[1] for r in responses])
-                    await asyncio.sleep(1)  # Добавляем задержку 1 секунда
-                    signature = f"[BotSignature:{state.bot_signature_id}]"  # Добавляем сигнатуру
-                    await state.client.send_message(chat_id, f"{response_text} {signature}", reply_to=message_id)
-                    logging.info(f"Отправлен ответ '{response_text}' {sender_info} в чат '{chat_title}' (тип: {chat_type})")
             logging.info(f"Успешно отправлено видео {url} ({platform}) {sender_info} в чат '{chat_title}' (тип: {chat_type})")
             return True
 
     except Exception as e:
-        # Проверяем, можно ли удалить сообщение с прогресс-баром
+        # Обновляем сообщение с прогресс-баром в случае ошибки
         try:
-            await state.client.delete_messages(chat_id, progress_msg.id)
+            await state.client.edit_message(
+                chat_id,
+                progress_msg.id,
+                f"Ошибка отправки видео {url} ({platform}): {str(e)}\n[BotSignature:{state.bot_signature_id}]"
+            )
         except Exception as delete_error:
-            logging.warning(f"Не удалось удалить сообщение с прогресс-баром в чате '{chat_title}': {delete_error}")
+            logging.warning(f"Не удалось обновить сообщение с прогресс-баром в чате '{chat_title}': {delete_error}")
         logging.error(f"Ошибка отправки видео {url} ({platform}) {sender_info} в чат '{chat_title}' (тип: {chat_type}): {str(e)}")
         return False
     finally:
@@ -606,6 +619,10 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
                     logging.error(f"Не удалось удалить файл {f} после нескольких попыток")
 
 async def process_video_link(chat_id, message_id, text, message):
+    # Добавляем рандомную задержку от 0.5 до 2 секунд
+    import random
+    await asyncio.sleep(random.uniform(0.5, 2.0))
+
     platform_settings = get_platform_settings()
 
     # Получаем информацию о чате для логирования
@@ -626,6 +643,9 @@ async def process_video_link(chat_id, message_id, text, message):
         logging.error(f"Не удалось получить информацию об отправителе сообщения {message_id} в чате {chat_id}: {str(e)}")
         sender_info = "для неизвестного пользователя"
 
+    # Проверяем, отправлено ли сообщение текущим пользователем
+    can_edit = message.sender_id == state.current_user_id
+
     for pattern_name, pattern in VIDEO_URL_PATTERNS.items():
         match = pattern.search(text)
         if not match or not platform_settings.get(pattern_name, False):
@@ -635,20 +655,32 @@ async def process_video_link(chat_id, message_id, text, message):
         if pattern_name == 'instagram':
             dd_url = f"https://www.ddinstagram.com/reel/{video_id}/"
             try:
-                logging.info(f"Отправка ссылки Instagram Reels: {dd_url} {sender_info} в чат '{chat_title}' (тип: {chat_type})")
-                await asyncio.sleep(1)  # Добавляем задержку 1 секунда
-                signature = f"[BotSignature:{state.bot_signature_id}]"  # Добавляем сигнатуру
-                await state.client.send_message(chat_id, f"{dd_url}\nInstagram Reels 📸 {signature}", reply_to=message_id)
-                if state.responses_enabled:  # Проверяем состояние переключателя
-                    responses = get_responses()
-                    if responses:
-                        response_text = random.choice([r[1] for r in responses])
-                        await asyncio.sleep(1)  # Добавляем задержку 1 секунда
-                        signature = f"[BotSignature:{state.bot_signature_id}]"  # Добавляем сигнатуру
-                        await state.client.send_message(chat_id, f"{response_text} {signature}", reply_to=message_id)
-                        logging.info(f"Отправлен ответ '{response_text}' {sender_info} в чат '{chat_title}' (тип: {chat_type})")
+                if can_edit:
+                    await state.client.edit_message(
+                        chat_id,
+                        message_id,
+                        f"{dd_url}\nInstagram Reels 📸\n[BotSignature:{state.bot_signature_id}]"
+                    )
+                else:
+                    await state.client.send_message(
+                        chat_id,
+                        f"{dd_url}\nInstagram Reels 📸\n[BotSignature:{state.bot_signature_id}]",
+                        reply_to=message_id
+                    )
                 logging.info(f"Успешно отправлена ссылка Instagram Reels: {dd_url} {sender_info} в чат '{chat_title}' (тип: {chat_type})")
             except Exception as e:
+                if can_edit:
+                    await state.client.edit_message(
+                        chat_id,
+                        message_id,
+                        f"Ошибка отправки ссылки Instagram Reels: {dd_url}\n{str(e)}\n[BotSignature:{state.bot_signature_id}]"
+                    )
+                else:
+                    await state.client.send_message(
+                        chat_id,
+                        f"Ошибка отправки ссылки Instagram Reels: {dd_url}\n{str(e)}\n[BotSignature:{state.bot_signature_id}]",
+                        reply_to=message_id
+                    )
                 logging.error(f"Ошибка отправки ссылки Instagram Reels: {dd_url} {sender_info} в чат '{chat_title}' (тип: {chat_type}): {str(e)}")
 
         elif pattern_name == 'tiktok':
@@ -656,7 +688,19 @@ async def process_video_link(chat_id, message_id, text, message):
             dd_url = f"https://vm.vxtiktok.com/{video_id}"
             temp_msg = None
             try:
-                temp_msg = await state.client.send_message(chat_id, "Обрабатываю TikTok...", reply_to=message_id)
+                if can_edit:
+                    await state.client.edit_message(
+                        chat_id,
+                        message_id,
+                        f"Обрабатываю TikTok...\n[BotSignature:{state.bot_signature_id}]"
+                    )
+                    temp_msg = message
+                else:
+                    temp_msg = await state.client.send_message(
+                        chat_id,
+                        f"Обрабатываю TikTok...\n[BotSignature:{state.bot_signature_id}]",
+                        reply_to=message_id
+                    )
                 # Ограничиваем экстракторы только TikTok
                 ydl_opts = {
                     'quiet': True,
@@ -671,24 +715,26 @@ async def process_video_link(chat_id, message_id, text, message):
                             for f in info.get('formats', [])) or info.get('is_live', False)
                 if has_video:
                     logging.info(f"Отправка ссылки TikTok: {dd_url} {sender_info} в чат '{chat_title}' (тип: {chat_type})")
-                    await asyncio.sleep(1)  # Добавляем задержку 1 секунда
-                    signature = f"[BotSignature:{state.bot_signature_id}]"  # Добавляем сигнатуру
-                    await state.client.edit_message(chat_id, temp_msg.id, f"{dd_url}\nTikTok 🎵 {signature}")
-                    if state.responses_enabled:  # Проверяем состояние переключателя
-                        responses = get_responses()
-                        if responses:
-                            response_text = random.choice([r[1] for r in responses])
-                            await asyncio.sleep(1)  # Добавляем задержку 1 секунда
-                            signature = f"[BotSignature:{state.bot_signature_id}]"  # Добавляем сигнатуру
-                            await state.client.send_message(chat_id, f"{response_text} {signature}", reply_to=message_id)
-                            logging.info(f"Отправлен ответ '{response_text}' {sender_info} в чат '{chat_title}' (тип: {chat_type})")
+                    await state.client.edit_message(
+                        chat_id,
+                        temp_msg.id,
+                        f"{dd_url}\nTikTok 🎵\n[BotSignature:{state.bot_signature_id}]"
+                    )
                     logging.info(f"Успешно отправлена ссылка TikTok: {dd_url} {sender_info} в чат '{chat_title}' (тип: {chat_type})")
                 else:
-                    await state.client.delete_messages(chat_id, temp_msg.id)
+                    await state.client.edit_message(
+                        chat_id,
+                        temp_msg.id,
+                        f"Ссылка TikTok отклонена: {dd_url} (нет видео-контента)\n[BotSignature:{state.bot_signature_id}]"
+                    )
                     logging.info(f"Ссылка TikTok отклонена: {dd_url} (нет видео-контента) {sender_info} в чат '{chat_title}' (тип: {chat_type})")
             except Exception as e:
                 if temp_msg:
-                    await state.client.delete_messages(chat_id, temp_msg.id)
+                    await state.client.edit_message(
+                        chat_id,
+                        temp_msg.id,
+                        f"Ошибка отправки ссылки TikTok: {dd_url}\n{str(e)}\n[BotSignature:{state.bot_signature_id}]"
+                    )
                 logging.error(f"Ошибка отправки ссылки TikTok: {dd_url} {sender_info} в чат '{chat_title}' (тип: {chat_type}): {str(e)}")
 
         elif pattern_name == 'youtube_shorts':
@@ -1197,6 +1243,7 @@ class AuthWindow(QMainWindow):
         self.update_button = QPushButton("🔄 Обновить")
         self.update_button.setFixedWidth(180)
         self.update_button.clicked.connect(self.on_update)
+        self.update_button.setVisible(False)
         self.update_button.setObjectName("update_button")
         extra_button_layout.addWidget(self.help_button)
         extra_button_layout.addSpacing(10)
