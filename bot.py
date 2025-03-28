@@ -12,12 +12,13 @@ import subprocess
 import contextlib
 from datetime import datetime
 from telethon import TelegramClient, events
+import telethon.errors
 from telethon.tl.types import User, Chat, Channel
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QProgressDialog, QTextBrowser,
-                               QLabel, QLineEdit, QPushButton, QDialog, QProgressBar, QMessageBox, QFileDialog,
+                               QLabel, QLineEdit, QPushButton, QDialog, QProgressBar, QMessageBox, QFileDialog, QMenu, QMenuBar,
                                QListWidget, QListWidgetItem, QRadioButton, QGroupBox, QTabWidget, QFrame, QGraphicsDropShadowEffect)
 from PySide6.QtCore import Qt, QTimer, QRegularExpression, Signal, QPropertyAnimation, QRect, QUrl, QThread
-from PySide6.QtGui import QRegularExpressionValidator, QColor, QDesktopServices, QCursor, QIcon
+from PySide6.QtGui import QRegularExpressionValidator, QColor, QDesktopServices, QCursor, QIcon, QAction
 from qasync import QEventLoop, asyncSlot
 import yt_dlp
 import json
@@ -26,6 +27,7 @@ import requests
 import zipfile
 import hashlib
 import ctypes
+import uuid
 
 # Настройка логирования
 logging.basicConfig(
@@ -86,6 +88,20 @@ def init_db():
     cursor.execute('''CREATE TABLE IF NOT EXISTS responses (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         text TEXT
+                      )''')
+    # Новая таблица для хранения данных участников
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+                        id INTEGER PRIMARY KEY,
+                        username TEXT,
+                        first_name TEXT,
+                        last_name TEXT,
+                        last_updated INTEGER
+                      )''')
+    # Новая таблица для связи участников с чатами
+    cursor.execute('''CREATE TABLE IF NOT EXISTS chat_participants (
+                        chat_id INTEGER,
+                        participant_id INTEGER,
+                        PRIMARY KEY (chat_id, participant_id)
                       )''')
     conn.commit()
     conn.close()
@@ -211,6 +227,45 @@ def update_response(response_id, text):
     conn.commit()
     conn.close()
 
+def save_user(user_id, username, first_name, last_name):
+    conn = sqlite3.connect('telegram_bot_data.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR REPLACE INTO users (id, username, first_name, last_name, last_updated) VALUES (?, ?, ?, ?, ?)",
+                   (user_id, username, first_name, last_name, int(time.time())))
+    conn.commit()
+    conn.close()
+
+def get_user(user_id):
+    conn = sqlite3.connect('telegram_bot_data.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT username, first_name, last_name FROM users WHERE id = ?", (user_id,))
+    data = cursor.fetchone()
+    conn.close()
+    return data  # Возвращает (username, first_name, last_name) или None
+
+def save_chat_participant(chat_id, participant_id):
+    conn = sqlite3.connect('telegram_bot_data.db')
+    cursor = conn.cursor()
+    cursor.execute("INSERT OR IGNORE INTO chat_participants (chat_id, participant_id) VALUES (?, ?)",
+                   (chat_id, participant_id))
+    conn.commit()
+    conn.close()
+
+def get_chats_by_participant(participant_id):
+    conn = sqlite3.connect('telegram_bot_data.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT chat_id FROM chat_participants WHERE participant_id = ?", (participant_id,))
+    data = cursor.fetchall()
+    conn.close()
+    return [chat_id for (chat_id,) in data]
+
+def clear_chat_participants(chat_id):
+    conn = sqlite3.connect('telegram_bot_data.db')
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM chat_participants WHERE chat_id = ?", (chat_id,))
+    conn.commit()
+    conn.close()
+
 class DownloadThread(QThread):
     progress = Signal(int)
     downloadedBytes = Signal(int)  # Новый сигнал для количества загруженных байтов
@@ -281,6 +336,8 @@ class AppState:
         self.session_exists = os.path.exists('bot.session')
         self.chat_cache = {}
         self.participants_cache = {}
+        self.user_cache = {}  # Кэш для данных участников: {user_id: {username, first_name, last_name}}
+        self.participant_to_chats = {}  # Кэш для связи участников с чатами: {participant_id: [chat_id1, chat_id2, ...]}
         self.switch_is_on = False
         self.active_tasks = []
         self.flood_wait_until = 0
@@ -289,6 +346,7 @@ class AppState:
         self.errors_per_chat = {}  # Статистика ошибок за сессию: {chat_id: count}
         self.responses_enabled = True
         self.current_user_id = None  # Добавляем поле для ID текущего пользователя
+        self.bot_signature_id = None
 
     async def ensure_client_disconnected(self):
         if self.client is not None:
@@ -458,7 +516,9 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
                     responses = get_responses()
                     if responses:
                         response_text = random.choice([r[1] for r in responses])
-                        await state.client.send_message(chat_id, response_text, reply_to=message_id)
+                        await asyncio.sleep(1)  # Добавляем задержку 1 секунда
+                        signature = f"[BotSignature:{state.bot_signature_id}]"  # Добавляем сигнатуру
+                        await state.client.send_message(chat_id, f"{response_text} {signature}", reply_to=message_id)
                         logging.info(f"Отправлен ответ '{response_text}' {sender_info} в чат '{chat_title}' (тип: {chat_type})")
                 return False
 
@@ -505,6 +565,14 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
                     force_document=False
                 )
             await state.client.delete_messages(chat_id, progress_msg.id)
+            if state.responses_enabled:  # Проверяем состояние переключателя
+                responses = get_responses()
+                if responses:
+                    response_text = random.choice([r[1] for r in responses])
+                    await asyncio.sleep(1)  # Добавляем задержку 1 секунда
+                    signature = f"[BotSignature:{state.bot_signature_id}]"  # Добавляем сигнатуру
+                    await state.client.send_message(chat_id, f"{response_text} {signature}", reply_to=message_id)
+                    logging.info(f"Отправлен ответ '{response_text}' {sender_info} в чат '{chat_title}' (тип: {chat_type})")
             logging.info(f"Успешно отправлено видео {url} ({platform}) {sender_info} в чат '{chat_title}' (тип: {chat_type})")
             return True
 
@@ -568,7 +636,17 @@ async def process_video_link(chat_id, message_id, text, message):
             dd_url = f"https://www.ddinstagram.com/reel/{video_id}/"
             try:
                 logging.info(f"Отправка ссылки Instagram Reels: {dd_url} {sender_info} в чат '{chat_title}' (тип: {chat_type})")
-                await state.client.send_message(chat_id, f"{dd_url}\nInstagram Reels 📸", reply_to=message_id)
+                await asyncio.sleep(1)  # Добавляем задержку 1 секунда
+                signature = f"[BotSignature:{state.bot_signature_id}]"  # Добавляем сигнатуру
+                await state.client.send_message(chat_id, f"{dd_url}\nInstagram Reels 📸 {signature}", reply_to=message_id)
+                if state.responses_enabled:  # Проверяем состояние переключателя
+                    responses = get_responses()
+                    if responses:
+                        response_text = random.choice([r[1] for r in responses])
+                        await asyncio.sleep(1)  # Добавляем задержку 1 секунда
+                        signature = f"[BotSignature:{state.bot_signature_id}]"  # Добавляем сигнатуру
+                        await state.client.send_message(chat_id, f"{response_text} {signature}", reply_to=message_id)
+                        logging.info(f"Отправлен ответ '{response_text}' {sender_info} в чат '{chat_title}' (тип: {chat_type})")
                 logging.info(f"Успешно отправлена ссылка Instagram Reels: {dd_url} {sender_info} в чат '{chat_title}' (тип: {chat_type})")
             except Exception as e:
                 logging.error(f"Ошибка отправки ссылки Instagram Reels: {dd_url} {sender_info} в чат '{chat_title}' (тип: {chat_type}): {str(e)}")
@@ -593,7 +671,17 @@ async def process_video_link(chat_id, message_id, text, message):
                             for f in info.get('formats', [])) or info.get('is_live', False)
                 if has_video:
                     logging.info(f"Отправка ссылки TikTok: {dd_url} {sender_info} в чат '{chat_title}' (тип: {chat_type})")
-                    await state.client.edit_message(chat_id, temp_msg.id, f"{dd_url}\nTikTok 🎵")
+                    await asyncio.sleep(1)  # Добавляем задержку 1 секунда
+                    signature = f"[BotSignature:{state.bot_signature_id}]"  # Добавляем сигнатуру
+                    await state.client.edit_message(chat_id, temp_msg.id, f"{dd_url}\nTikTok 🎵 {signature}")
+                    if state.responses_enabled:  # Проверяем состояние переключателя
+                        responses = get_responses()
+                        if responses:
+                            response_text = random.choice([r[1] for r in responses])
+                            await asyncio.sleep(1)  # Добавляем задержку 1 секунда
+                            signature = f"[BotSignature:{state.bot_signature_id}]"  # Добавляем сигнатуру
+                            await state.client.send_message(chat_id, f"{response_text} {signature}", reply_to=message_id)
+                            logging.info(f"Отправлен ответ '{response_text}' {sender_info} в чат '{chat_title}' (тип: {chat_type})")
                     logging.info(f"Успешно отправлена ссылка TikTok: {dd_url} {sender_info} в чат '{chat_title}' (тип: {chat_type})")
                 else:
                     await state.client.delete_messages(chat_id, temp_msg.id)
@@ -1093,32 +1181,62 @@ class AuthWindow(QMainWindow):
         self.connect_button = QPushButton("🔗 Подключиться", enabled=False)
         self.connect_button.setFixedWidth(180)
         self.connect_button.clicked.connect(self.on_connect)
+        self.connect_button.setObjectName("connect_button")
         self.clear_button = QPushButton("🗑️ Удалить авторизацию")
         self.clear_button.setFixedWidth(180)
         self.clear_button.clicked.connect(self.start_clear_auth)
+        self.clear_button.setObjectName("clear_button")
         button_layout.addWidget(self.connect_button)
         button_layout.addSpacing(10)
         button_layout.addWidget(self.clear_button)
 
         extra_button_layout = QHBoxLayout()
-        self.help_button = QPushButton("ℹ️ Помощь")
+        self.help_button = QPushButton("📖 Помощь")  # Заменили ℹ️ на 📖
         self.help_button.setFixedWidth(180)
         self.help_button.clicked.connect(self.show_help_dialog)
         self.update_button = QPushButton("🔄 Обновить")
         self.update_button.setFixedWidth(180)
         self.update_button.clicked.connect(self.on_update)
-        self.update_button.setVisible(False)
+        self.update_button.setObjectName("update_button")
         extra_button_layout.addWidget(self.help_button)
         extra_button_layout.addSpacing(10)
         extra_button_layout.addWidget(self.update_button)
 
         self.status_label = QLabel("", alignment=Qt.AlignCenter)
 
-        layout.addWidget(QLabel("Телефон"))
+        # Добавляем горизонтальные layouts для меток с подсказками
+        phone_layout = QHBoxLayout()
+        phone_label = QLabel("Телефон")
+        phone_info = QLabel("ℹ️")
+        phone_info.setToolTip("Введите номер телефона в формате +79991234567")
+        phone_info.setObjectName("info_icon")
+        phone_layout.addWidget(phone_label)
+        phone_layout.addWidget(phone_info)
+        phone_layout.addStretch()
+
+        api_id_layout = QHBoxLayout()
+        api_id_label = QLabel("API ID")
+        api_id_info = QLabel("ℹ️")
+        api_id_info.setToolTip("Получите ваш API ID на my.telegram.org")
+        api_id_info.setObjectName("info_icon")
+        api_id_layout.addWidget(api_id_label)
+        api_id_layout.addWidget(api_id_info)
+        api_id_layout.addStretch()
+
+        api_hash_layout = QHBoxLayout()
+        api_hash_label = QLabel("API Hash")
+        api_hash_info = QLabel("ℹ️")
+        api_hash_info.setToolTip("Получите ваш API Hash на my.telegram.org")
+        api_hash_info.setObjectName("info_icon")
+        api_hash_layout.addWidget(api_hash_label)
+        api_hash_layout.addWidget(api_hash_info)
+        api_hash_layout.addStretch()
+
+        layout.addLayout(phone_layout)
         layout.addWidget(self.phone_input)
-        layout.addWidget(QLabel("API ID"))
+        layout.addLayout(api_id_layout)
         layout.addWidget(self.api_id_input)
-        layout.addWidget(QLabel("API Hash"))
+        layout.addLayout(api_hash_layout)
         layout.addWidget(self.api_hash_input)
         layout.addWidget(self.status_indicator, alignment=Qt.AlignCenter)
         layout.addWidget(self.progress_bar)
@@ -1267,7 +1385,9 @@ class AuthWindow(QMainWindow):
         try:
             me = await state.client.get_me()
             state.current_user_id = me.id
+            state.bot_signature_id = str(uuid.uuid4())  # Генерируем уникальный ID для сигнатуры
             logging.info(f"ID текущего пользователя сохранён: {state.current_user_id}")
+            logging.info(f"Сгенерирован bot_signature_id: {state.bot_signature_id}")
         except Exception as e:
             logging.error(f"Не удалось получить ID текущего пользователя: {str(e)}")
             state.current_user_id = None
@@ -2043,18 +2163,29 @@ class CodeDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Введите код")
-        self.setFixedSize(300, 200)  # Устанавливаем фиксированный размер
+        self.setFixedSize(300, 200)
         # Центрируем окно
         screen = QApplication.primaryScreen().geometry()
         self.move((screen.width() - self.width()) // 2, (screen.height() - self.height()) // 2)
-        # Остальной код остаётся без изменений
+
         layout = QVBoxLayout()
         self.code_input = QLineEdit(self, placeholderText="Введите код из Telegram")
         self.submit_button = QPushButton("Подтвердить")
         self.submit_button.clicked.connect(self.on_submit)
         self.error_label = QLabel("", styleSheet="color: #FF0000")
         self.status_label = QLabel("")
-        layout.addWidget(QLabel("Код"))
+
+        # Добавляем горизонтальный layout для метки с подсказкой
+        code_layout = QHBoxLayout()
+        code_label = QLabel("Код")
+        code_info = QLabel("ℹ️")
+        code_info.setToolTip("Введите код, отправленный вам в Telegram")
+        code_info.setObjectName("info_icon")
+        code_layout.addWidget(code_label)
+        code_layout.addWidget(code_info)
+        code_layout.addStretch()
+
+        layout.addLayout(code_layout)
         layout.addWidget(self.code_input)
         layout.addWidget(self.submit_button)
         layout.addWidget(self.error_label)
@@ -2075,18 +2206,29 @@ class TwoFADialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Введите пароль 2FA")
-        self.setFixedSize(300, 200)  # Устанавливаем фиксированный размер
+        self.setFixedSize(300, 200)
         # Центрируем окно
         screen = QApplication.primaryScreen().geometry()
         self.move((screen.width() - self.width()) // 2, (screen.height() - self.height()) // 2)
-        # Остальной код остаётся без изменений
+
         layout = QVBoxLayout()
         self.password_input = QLineEdit(self, placeholderText="Введите пароль 2FA (если есть)")
         self.submit_button = QPushButton("Подтвердить")
         self.submit_button.clicked.connect(self.on_submit)
         self.error_label = QLabel("", styleSheet="color: #FF0000")
         self.status_label = QLabel("")
-        layout.addWidget(QLabel("Пароль"))
+
+        # Добавляем горизонтальный layout для метки с подсказкой
+        password_layout = QHBoxLayout()
+        password_label = QLabel("Пароль")
+        password_info = QLabel("ℹ️")
+        password_info.setToolTip("Введите пароль двухфакторной аутентификации Telegram (если включен)")
+        password_info.setObjectName("info_icon")
+        password_layout.addWidget(password_label)
+        password_layout.addWidget(password_info)
+        password_layout.addStretch()
+
+        layout.addLayout(password_layout)
         layout.addWidget(self.password_input)
         layout.addWidget(self.submit_button)
         layout.addWidget(self.error_label)
@@ -2097,7 +2239,71 @@ class TwoFADialog(QDialog):
         self.password_submitted.emit(self.password_input.text())
         self.close()
 
-class ChatSettingsWindow(QMainWindow):
+class MenuBarMixin:
+    def setup_menu_bar(self):
+        self.help_dialog = None  # Для хранения экземпляра HelpDialog
+
+        # Проверяем, является ли окно QMainWindow
+        if isinstance(self, QMainWindow):
+            # Для QMainWindow используем встроенный menuBar()
+            menu_bar = self.menuBar()
+        else:
+            # Для QDialog или других типов создаём QMenuBar вручную
+            menu_bar = QMenuBar()
+            # Если у окна есть layout, добавляем menu_bar в него
+            if hasattr(self, 'layout') and self.layout() is not None:
+                self.layout().setMenuBar(menu_bar)
+            else:
+                # Если layout ещё не установлен, создаём его
+                layout = QVBoxLayout(self)
+                layout.setMenuBar(menu_bar)
+                self.setLayout(layout)
+
+        # Добавляем меню "📖 Помощь"
+        help_menu = menu_bar.addMenu("Справка")
+        help_action = QAction("📖 Помощь", self)
+        help_action.triggered.connect(self.open_help_dialog)
+        help_menu.addAction(help_action)
+
+        # Применяем стили к меню-бару
+        menu_bar.setStyleSheet("""
+            QMenuBar {
+                background-color: #2F2F2F;  /* Тёмный фон, как в окне */
+                color: #FFFFFF;             /* Белый текст */
+                padding: 2px;
+            }
+            QMenuBar::item {
+                background-color: #2F2F2F;  /* Фон пунктов меню */
+                color: #FFFFFF;             /* Белый текст */
+                padding: 5px 10px;
+            }
+            QMenuBar::item:selected {
+                background-color: #505050;  /* Фон при наведении */
+            }
+            QMenu {
+                background-color: #2F2F2F;  /* Фон выпадающего меню */
+                color: #FFFFFF;             /* Белый текст */
+                border: 1px solid #505050;  /* Граница меню */
+            }
+            QMenu::item {
+                padding: 5px 20px;
+                background-color: #2F2F2F;  /* Фон пунктов */
+                color: #FFFFFF;             /* Белый текст */
+            }
+            QMenu::item:selected {
+                background-color: #505050;  /* Фон при наведении */
+            }
+        """)
+
+    def open_help_dialog(self):
+        if self.help_dialog is None or not self.help_dialog.isVisible():
+            self.help_dialog = HelpDialog(self)
+            self.help_dialog.show()
+        else:
+            self.help_dialog.raise_()
+            self.help_dialog.activateWindow()
+
+class ChatSettingsWindow(QMainWindow, MenuBarMixin):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Telegram Bot - Настройка чатов")
@@ -2109,114 +2315,15 @@ class ChatSettingsWindow(QMainWindow):
         icon_path = "icons/256.ico"
         self.setWindowIcon(QIcon(icon_path))
 
+        # Добавляем меню-бар через миксин
+        self.setup_menu_bar()
+
         widget = QWidget()
         self.setCentralWidget(widget)
         main_layout = QHBoxLayout(widget)
 
+        # Новая левая часть: информация о чате и список участников
         left_layout = QVBoxLayout()
-        # Общие чаты: метка и эмодзи
-        all_chats_header_layout = QHBoxLayout()
-        self.all_chats_label = QLabel("Общие чаты: 0")
-        self.all_chats_spinner = QLabel("⏳")
-        self.all_chats_spinner.setFixedSize(16, 16)
-        self.all_chats_spinner.setVisible(False)
-        all_chats_header_layout.addWidget(self.all_chats_label)
-        all_chats_header_layout.addWidget(self.all_chats_spinner)
-        left_layout.addLayout(all_chats_header_layout)
-
-        self.all_chats_search = QLineEdit(placeholderText="Поиск по чатам")
-        self.all_chats_search.textChanged.connect(self.filter_all_chats)
-        left_layout.addWidget(self.all_chats_search)
-
-        all_chats_filter_group = QGroupBox()
-        all_chats_filter_layout = QHBoxLayout()
-        self.all_chats_all = QRadioButton("Все", checked=True)
-        self.all_chats_groups = QRadioButton("Групповые")
-        self.all_chats_channels = QRadioButton("Каналы")
-        self.all_chats_private = QRadioButton("Лички")
-        all_chats_filter_layout.addWidget(self.all_chats_all)
-        all_chats_filter_layout.addWidget(self.all_chats_groups)
-        all_chats_filter_layout.addWidget(self.all_chats_channels)
-        all_chats_filter_layout.addWidget(self.all_chats_private)
-        all_chats_filter_group.setLayout(all_chats_filter_layout)
-        left_layout.addWidget(all_chats_filter_group)
-
-        self.all_chats_list = QListWidget(maximumHeight=15 * 20)
-        self.all_chats_list.itemSelectionChanged.connect(self.update_buttons_and_info)
-        left_layout.addWidget(self.all_chats_list)
-
-        all_chats_buttons = QHBoxLayout()
-        self.add_all_button = QPushButton("Добавить все")
-        self.add_button = QPushButton("Добавить", enabled=False)
-        self.refresh_all_button = QPushButton("Обновить")
-        self.refresh_all_button.setToolTip("Обновить список всех доступных чатов")  # Подсказка
-        all_chats_buttons.addWidget(self.add_all_button)
-        all_chats_buttons.addWidget(self.add_button)
-        all_chats_buttons.addWidget(self.refresh_all_button)
-        left_layout.addLayout(all_chats_buttons)
-
-        # Добавленные чаты: метка и эмодзи
-        selected_chats_header_layout = QHBoxLayout()
-        self.selected_chats_label = QLabel("Добавленные чаты: 0")
-        self.selected_chats_spinner = QLabel("⏳")
-        self.selected_chats_spinner.setFixedSize(16, 16)
-        self.selected_chats_spinner.setVisible(False)
-        selected_chats_header_layout.addWidget(self.selected_chats_label)
-        selected_chats_header_layout.addWidget(self.selected_chats_spinner)
-        left_layout.addLayout(selected_chats_header_layout)
-
-        self.selected_chats_search = QLineEdit(placeholderText="Поиск по добавленным чатам")
-        self.selected_chats_search.textChanged.connect(self.filter_selected_chats)
-        left_layout.addWidget(self.selected_chats_search)
-
-        selected_chats_filter_group = QGroupBox()
-        selected_chats_filter_layout = QHBoxLayout()
-        self.selected_all = QRadioButton("Все", checked=True)
-        self.selected_groups = QRadioButton("Групповые")
-        self.selected_channels = QRadioButton("Каналы")
-        self.selected_private = QRadioButton("Лички")
-        selected_chats_filter_layout.addWidget(self.selected_all)
-        selected_chats_filter_layout.addWidget(self.selected_groups)
-        selected_chats_filter_layout.addWidget(self.selected_channels)
-        selected_chats_filter_layout.addWidget(self.selected_private)
-        selected_chats_filter_group.setLayout(selected_chats_filter_layout)
-        left_layout.addWidget(selected_chats_filter_group)
-
-        self.selected_chats_list = QListWidget(maximumHeight=10 * 20)
-        self.selected_chats_list.itemSelectionChanged.connect(self.update_buttons_and_info)
-        left_layout.addWidget(self.selected_chats_list)
-
-        selected_chats_buttons = QHBoxLayout()
-        self.remove_all_button = QPushButton("Удалить все")
-        self.remove_button = QPushButton("Удалить", enabled=False)
-        self.refresh_selected_button = QPushButton("Обновить")
-        self.refresh_selected_button.setToolTip("Обновить список добавленных чатов, удалить недоступные")  # Подсказка
-        selected_chats_buttons.addWidget(self.remove_all_button)
-        selected_chats_buttons.addWidget(self.remove_button)
-        selected_chats_buttons.addWidget(self.refresh_selected_button)
-        left_layout.addLayout(selected_chats_buttons)
-
-        navigation_buttons = QHBoxLayout()
-        self.next_button = QPushButton("Далее ➡️")
-        self.next_button.setObjectName("next_button")
-        self.next_button.setFixedSize(125, 40)
-        self.back_button = QPushButton("⬅️ Назад")
-        self.back_button.setObjectName("back_button")
-        self.back_button.setFixedSize(125, 40)
-        navigation_buttons.addWidget(self.back_button)
-        navigation_buttons.addStretch()
-        navigation_buttons.addWidget(self.next_button)
-        left_layout.addLayout(navigation_buttons)
-
-        # Уведомление "Данные обновлены!"
-        self.update_notification = QLabel("Данные обновлены!", alignment=Qt.AlignCenter)
-        self.update_notification.setStyleSheet("color: #00FF00;")
-        self.update_notification.setVisible(False)
-        left_layout.addWidget(self.update_notification)
-
-        main_layout.addLayout(left_layout)
-
-        right_layout = QVBoxLayout()
         self.chat_info_group = QGroupBox("Информация о чате")
         chat_info_layout = QVBoxLayout()
         self.chat_avatar = QLabel()
@@ -2235,16 +2342,130 @@ class ChatSettingsWindow(QMainWindow):
         chat_info_layout.addWidget(self.chat_link)
         chat_info_layout.addWidget(self.open_telegram_button)
         self.chat_info_group.setLayout(chat_info_layout)
-        right_layout.addWidget(self.chat_info_group)
+        left_layout.addWidget(self.chat_info_group)
 
         self.participants_list = QListWidget(maximumHeight=20 * 20)
-        right_layout.addWidget(self.participants_list)
-
-        self.clear_cache_button = QPushButton("Очистить кэш")
-        right_layout.addWidget(self.clear_cache_button)
+        # Включаем поддержку контекстного меню
+        self.participants_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.participants_list.customContextMenuRequested.connect(self.show_participant_context_menu)
+        left_layout.addWidget(self.participants_list)
 
         self.right_progress_bar = QProgressBar(maximum=0, visible=False)
-        right_layout.addWidget(self.right_progress_bar)
+        left_layout.addWidget(self.right_progress_bar)
+
+        # Новая правая часть: списки чатов
+        right_layout = QVBoxLayout()
+        # Общие чаты: метка и эмодзи
+        all_chats_header_layout = QHBoxLayout()
+        self.all_chats_label = QLabel("Общие чаты: 0")
+        self.all_chats_spinner = QLabel("⏳")
+        self.all_chats_spinner.setFixedSize(16, 16)
+        self.all_chats_spinner.setVisible(False)
+        all_chats_header_layout.addWidget(self.all_chats_label)
+        all_chats_header_layout.addWidget(self.all_chats_spinner)
+        right_layout.addLayout(all_chats_header_layout)
+
+        self.all_chats_search = QLineEdit(placeholderText="Поиск по чатам")
+        self.all_chats_search.textChanged.connect(self.filter_all_chats)
+        right_layout.addWidget(self.all_chats_search)
+
+        all_chats_filter_group = QGroupBox()
+        all_chats_filter_layout = QHBoxLayout()
+        self.all_chats_all = QRadioButton("Все", checked=True)
+        self.all_chats_groups = QRadioButton("Групповые")
+        self.all_chats_channels = QRadioButton("Каналы")
+        self.all_chats_private = QRadioButton("Лички")
+        all_chats_filter_layout.addWidget(self.all_chats_all)
+        all_chats_filter_layout.addWidget(self.all_chats_groups)
+        all_chats_filter_layout.addWidget(self.all_chats_channels)
+        all_chats_filter_layout.addWidget(self.all_chats_private)
+        all_chats_filter_group.setLayout(all_chats_filter_layout)
+        right_layout.addWidget(all_chats_filter_group)
+
+        self.all_chats_list = QListWidget(maximumHeight=15 * 20)
+        self.all_chats_list.itemSelectionChanged.connect(self.update_buttons_and_info)
+        right_layout.addWidget(self.all_chats_list)
+
+        all_chats_buttons = QHBoxLayout()
+        self.add_button = QPushButton("➕ Добавить", enabled=False)
+        self.add_button.setObjectName("add_button")
+        self.add_all_button = QPushButton("➕ Добавить все")
+        self.add_all_button.setObjectName("add_all_button")
+        self.refresh_all_button = QPushButton("🔄 Обновить")
+        self.refresh_all_button.setToolTip("Обновить список всех доступных чатов")
+        all_chats_buttons.addWidget(self.add_button)
+        all_chats_buttons.addWidget(self.add_all_button)
+        all_chats_buttons.addWidget(self.refresh_all_button)
+        right_layout.addLayout(all_chats_buttons)
+
+        # Добавляем кнопку "Очистить кэш" с подсказкой на самой кнопке
+        self.clear_cache_button = QPushButton("🧹 Очистить кэш")
+        self.clear_cache_button.setToolTip("Очищает кэш чатов и участников, обновляет списки")
+        right_layout.addWidget(self.clear_cache_button)
+
+        # Добавленные чаты: метка и эмодзи
+        selected_chats_header_layout = QHBoxLayout()
+        self.selected_chats_label = QLabel("Добавленные чаты: 0")
+        self.selected_chats_spinner = QLabel("⏳")
+        self.selected_chats_spinner.setFixedSize(16, 16)
+        self.selected_chats_spinner.setVisible(False)
+        selected_chats_header_layout.addWidget(self.selected_chats_label)
+        selected_chats_header_layout.addWidget(self.selected_chats_spinner)
+        right_layout.addLayout(selected_chats_header_layout)
+
+        self.selected_chats_search = QLineEdit(placeholderText="Поиск по добавленным чатам")
+        self.selected_chats_search.textChanged.connect(self.filter_selected_chats)
+        right_layout.addWidget(self.selected_chats_search)
+
+        selected_chats_filter_group = QGroupBox()
+        selected_chats_filter_layout = QHBoxLayout()
+        self.selected_all = QRadioButton("Все", checked=True)
+        self.selected_groups = QRadioButton("Групповые")
+        self.selected_channels = QRadioButton("Каналы")
+        self.selected_private = QRadioButton("Лички")
+        selected_chats_filter_layout.addWidget(self.selected_all)
+        selected_chats_filter_layout.addWidget(self.selected_groups)
+        selected_chats_filter_layout.addWidget(self.selected_channels)
+        selected_chats_filter_layout.addWidget(self.selected_private)
+        selected_chats_filter_group.setLayout(selected_chats_filter_layout)
+        right_layout.addWidget(selected_chats_filter_group)
+
+        self.selected_chats_list = QListWidget(maximumHeight=10 * 20)
+        self.selected_chats_list.itemSelectionChanged.connect(self.update_buttons_and_info)
+        right_layout.addWidget(self.selected_chats_list)
+
+        selected_chats_buttons = QHBoxLayout()
+        self.remove_button = QPushButton("🗑️ Удалить", enabled=False)
+        self.remove_button.setObjectName("remove_button")
+        self.remove_all_button = QPushButton("🗑️ Удалить все")
+        self.remove_all_button.setObjectName("remove_all_button")
+        self.refresh_selected_button = QPushButton("🔄 Обновить")
+        self.refresh_selected_button.setToolTip("Обновить список добавленных чатов, удалить недоступные")
+        selected_chats_buttons.addWidget(self.remove_button)
+        selected_chats_buttons.addWidget(self.remove_all_button)
+        selected_chats_buttons.addWidget(self.refresh_selected_button)
+        right_layout.addLayout(selected_chats_buttons)
+
+        navigation_buttons = QHBoxLayout()
+        self.next_button = QPushButton("Далее ➡️")
+        self.next_button.setObjectName("next_button")
+        self.next_button.setFixedSize(125, 40)
+        self.back_button = QPushButton("⬅️ Назад")
+        self.back_button.setObjectName("back_button")
+        self.back_button.setFixedSize(125, 40)
+        navigation_buttons.addWidget(self.back_button)
+        navigation_buttons.addStretch()
+        navigation_buttons.addWidget(self.next_button)
+        right_layout.addLayout(navigation_buttons)
+
+        # Уведомление "Данные обновлены!"
+        self.update_notification = QLabel("Данные обновлены!", alignment=Qt.AlignCenter)
+        self.update_notification.setStyleSheet("color: #00FF00;")
+        self.update_notification.setVisible(False)
+        right_layout.addWidget(self.update_notification)
+
+        # Добавляем layouts в main_layout (поменяли местами)
+        main_layout.addLayout(left_layout)
         main_layout.addLayout(right_layout)
 
         self.add_all_button.clicked.connect(self.add_all_chats)
@@ -2272,6 +2493,49 @@ class ChatSettingsWindow(QMainWindow):
         # Автоматическое обновление списков с задержкой
         QTimer.singleShot(500, self.refresh_all_chats)
         QTimer.singleShot(500, self.refresh_selected_chats)
+
+    def open_help_dialog(self):
+        if self.help_dialog is None or not self.help_dialog.isVisible():
+            self.help_dialog = HelpDialog(self)
+            self.help_dialog.show()
+        else:
+            self.help_dialog.raise_()
+            self.help_dialog.activateWindow()
+
+    def show_participant_context_menu(self, position):
+        if not self.participants_list.itemAt(position):
+            return
+
+        item = self.participants_list.itemAt(position)
+        user_id = item.data(Qt.UserRole)
+        user_data = state.user_cache.get(user_id) or get_user(user_id)
+
+        if not user_data:
+            return
+
+        username, first_name, last_name = user_data
+
+        menu = QMenu(self)
+        copy_id_action = QAction("Копировать ID", self)
+        copy_id_action.triggered.connect(lambda: QApplication.clipboard().setText(str(user_id)))
+        menu.addAction(copy_id_action)
+
+        if username:
+            copy_username_action = QAction("Копировать username", self)
+            copy_username_action.triggered.connect(lambda: QApplication.clipboard().setText(f"@{username}"))
+            menu.addAction(copy_username_action)
+
+        if first_name:
+            copy_first_name_action = QAction("Копировать имя", self)
+            copy_first_name_action.triggered.connect(lambda: QApplication.clipboard().setText(first_name))
+            menu.addAction(copy_first_name_action)
+
+        if last_name:
+            copy_last_name_action = QAction("Копировать фамилию", self)
+            copy_last_name_action.triggered.connect(lambda: QApplication.clipboard().setText(last_name))
+            menu.addAction(copy_last_name_action)
+
+        menu.exec(self.participants_list.viewport().mapToGlobal(position))
 
     def get_chat_type(self, entity):
         if isinstance(entity, User):
@@ -2305,8 +2569,39 @@ class ChatSettingsWindow(QMainWindow):
 
         my_id = state.current_user_id
 
+        # Множество chat_id, которые нужно показать
+        chats_to_show = set()
+
+        # Поиск по ID чата
+        if search_text.isdigit():
+            chat_id = int(search_text)
+            if chat_id in state.chat_cache and chat_id not in selected_chat_ids:
+                chats_to_show.add(chat_id)
+
+        # Поиск по данным участников
+        if search_text:
+            # Поиск по ID участника
+            if search_text.isdigit():
+                participant_id = int(search_text)
+                if participant_id in state.participant_to_chats:
+                    for chat_id in state.participant_to_chats[participant_id]:
+                        if chat_id not in selected_chat_ids:
+                            chats_to_show.add(chat_id)
+            else:
+                # Поиск по username, имени или фамилии
+                search_username = search_text[1:] if search_text.startswith('@') else search_text
+                for user_id, (username, first_name, last_name) in state.user_cache.items():
+                    if (username and search_username in username.lower()) or \
+                    (first_name and search_username in first_name.lower()) or \
+                    (last_name and search_username in last_name.lower()):
+                        if user_id in state.participant_to_chats:
+                            for chat_id in state.participant_to_chats[user_id]:
+                                if chat_id not in selected_chat_ids:
+                                    chats_to_show.add(chat_id)
+
+        # Поиск по заголовку чата
         for chat_id, entity in state.chat_cache.items():
-            if chat_id in selected_chat_ids:
+            if chat_id in selected_chat_ids and chat_id not in chats_to_show:
                 continue
             # Проверяем, является ли чат "Избранным"
             is_saved_messages = my_id is not None and chat_id == my_id
@@ -2330,7 +2625,7 @@ class ChatSettingsWindow(QMainWindow):
             if (filter_type == "all" or 
                 (filter_type == "group" and chat_type in ["Группа", "Супергруппа"]) or
                 (filter_type == "channel" and chat_type == "Канал") or
-                (filter_type == "private" and chat_type == "Личный")) and search_text in title.lower():
+                (filter_type == "private" and chat_type == "Личный")) and (search_text in title.lower() or chat_id in chats_to_show):
                 item = QListWidgetItem(display_text)
                 item.setData(Qt.UserRole, chat_id)
                 if chat_id in selected_chat_ids:
@@ -2360,6 +2655,36 @@ class ChatSettingsWindow(QMainWindow):
 
         my_id = state.current_user_id
 
+        # Множество chat_id, которые нужно показать
+        chats_to_show = set()
+
+        # Поиск по ID чата
+        if search_text.isdigit():
+            chat_id = int(search_text)
+            for selected_chat_id, _, _ in get_selected_chats():
+                if selected_chat_id == chat_id:
+                    chats_to_show.add(chat_id)
+
+        # Поиск по данным участников
+        if search_text:
+            # Поиск по ID участника
+            if search_text.isdigit():
+                participant_id = int(search_text)
+                if participant_id in state.participant_to_chats:
+                    for chat_id in state.participant_to_chats[participant_id]:
+                        chats_to_show.add(chat_id)
+            else:
+                # Поиск по username, имени или фамилии
+                search_username = search_text[1:] if search_text.startswith('@') else search_text
+                for user_id, (username, first_name, last_name) in state.user_cache.items():
+                    if (username and search_username in username.lower()) or \
+                    (first_name and search_username in first_name.lower()) or \
+                    (last_name and search_username in last_name.lower()):
+                        if user_id in state.participant_to_chats:
+                            for chat_id in state.participant_to_chats[user_id]:
+                                chats_to_show.add(chat_id)
+
+        # Поиск по заголовку чата
         for chat_id, title, chat_type in get_selected_chats():
             # Проверяем, является ли чат "Избранным"
             is_saved_messages = my_id is not None and chat_id == my_id
@@ -2374,7 +2699,7 @@ class ChatSettingsWindow(QMainWindow):
             if (filter_type == "all" or 
                 (filter_type == "group" and chat_type in ["Группа", "Супергруппа"]) or
                 (filter_type == "channel" and chat_type == "Канал") or
-                (filter_type == "private" and chat_type == "Личный")) and search_text in title.lower():
+                (filter_type == "private" and chat_type == "Личный")) and (search_text in title.lower() or chat_id in chats_to_show):
                 item = QListWidgetItem(display_text)
                 item.setData(Qt.UserRole, chat_id)
                 self.selected_chats_list.addItem(item)
@@ -2382,9 +2707,29 @@ class ChatSettingsWindow(QMainWindow):
         self.next_button.setEnabled(self.selected_chats_list.count() > 0)
 
     def update_buttons_and_info(self):
+        # Снимаем выделение в другом списке
+        if self.sender() == self.all_chats_list:
+            self.selected_chats_list.clearSelection()
+        elif self.sender() == self.selected_chats_list:
+            self.all_chats_list.clearSelection()
+
+        # Активируем/деактивируем кнопки в зависимости от наличия выделения
         self.add_button.setEnabled(bool(self.all_chats_list.selectedItems()))
         self.remove_button.setEnabled(bool(self.selected_chats_list.selectedItems()))
-        self.update_chat_info()
+
+        # Выбираем чат для отображения информации
+        selected = self.all_chats_list.selectedItems() or self.selected_chats_list.selectedItems()
+        if selected:
+            self.update_chat_info()
+        else:
+            # Если ничего не выбрано, очищаем информацию
+            self.chat_title.setText("Название: -")
+            self.chat_id.setText("ID: -")
+            self.chat_type.setText("Тип: -")
+            self.chat_participants_count.setText("Участников: -")
+            self.chat_link.setText("Ссылка: -")
+            self.open_telegram_button.setVisible(False)
+            self.participants_list.clear()
 
     @asyncSlot()
     async def refresh_all_chats(self):
@@ -2438,7 +2783,7 @@ class ChatSettingsWindow(QMainWindow):
         finally:
             self.all_chats_spinner.setVisible(False)
             self.right_progress_bar.setVisible(False)
-            self.refresh_all_button.setText("Обновить")
+            self.refresh_all_button.setText("🔄 Обновить")
             self.refresh_all_button.setEnabled(True)
 
     @asyncSlot()
@@ -2492,7 +2837,7 @@ class ChatSettingsWindow(QMainWindow):
         finally:
             self.selected_chats_spinner.setVisible(False)
             self.right_progress_bar.setVisible(False)
-            self.refresh_selected_button.setText("Обновить")
+            self.refresh_selected_button.setText("🔄 Обновить")
             self.refresh_selected_button.setEnabled(True)
 
     def add_all_chats(self):
@@ -2596,26 +2941,85 @@ class ChatSettingsWindow(QMainWindow):
         self.participants_list.clear()
         self.right_progress_bar.setVisible(True)
         try:
+            # Получаем ID текущего пользователя
+            if state.current_user_id is None and state.client is not None:
+                try:
+                    me = await state.client.get_me()
+                    state.current_user_id = me.id
+                    logging.info(f"ID текущего пользователя сохранён в update_participants: {state.current_user_id}")
+                except Exception as e:
+                    logging.error(f"Не удалось получить ID текущего пользователя в update_participants: {str(e)}")
+                    state.current_user_id = None
+
+            my_id = state.current_user_id
+
+            # Очищаем старые связи для этого чата
+            clear_chat_participants(chat_id)
+
             if isinstance(entity, User):
                 me = await state.client.get_me()
-                for user in [me, entity]:
-                    username = f"@{user.username}" if user.username else ""
-                    name = f"{user.first_name or ''} {user.last_name or ''}".strip()
-                    item = QListWidgetItem(f"{username} {name} {user.id}")
-                    item.setData(Qt.UserRole, user.id)
-                    if user.status:
+                # Если это "Избранное" (чат с самим собой), показываем только текущего пользователя
+                if chat_id == my_id:
+                    username = me.username if me.username else ""
+                    first_name = me.first_name if me.first_name else ""
+                    last_name = me.last_name if me.last_name else ""
+                    # Сохраняем в базу и кэш
+                    save_user(me.id, username, first_name, last_name)
+                    state.user_cache[me.id] = (username, first_name, last_name)
+                    save_chat_participant(chat_id, me.id)
+                    state.participant_to_chats.setdefault(me.id, []).append(chat_id)
+                    # Удаляем дубликаты в participant_to_chats
+                    state.participant_to_chats[me.id] = list(set(state.participant_to_chats[me.id]))
+                    # Отображаем в списке
+                    item = QListWidgetItem(f"(Я) {f'@{username}' if username else ''} {first_name} {last_name} {me.id}")
+                    item.setData(Qt.UserRole, me.id)
+                    if me.status:
                         item.setForeground(Qt.green)
                     self.participants_list.addItem(item)
+                else:
+                    # Для обычных личных чатов показываем обоих участников
+                    for user in [me, entity]:
+                        username = user.username if user.username else ""
+                        first_name = user.first_name if user.first_name else ""
+                        last_name = user.last_name if user.last_name else ""
+                        # Сохраняем в базу и кэш
+                        save_user(user.id, username, first_name, last_name)
+                        state.user_cache[user.id] = (username, first_name, last_name)
+                        save_chat_participant(chat_id, user.id)
+                        state.participant_to_chats.setdefault(user.id, []).append(chat_id)
+                        state.participant_to_chats[user.id] = list(set(state.participant_to_chats[user.id]))
+                        # Отображаем в списке
+                        prefix = "(Я) " if user.id == my_id else ""
+                        item = QListWidgetItem(f"{prefix}{f'@{username}' if username else ''} {first_name} {last_name} {user.id}")
+                        item.setData(Qt.UserRole, user.id)
+                        if user.status:
+                            item.setForeground(Qt.green)
+                        self.participants_list.addItem(item)
             else:
-                async for participant in state.client.iter_participants(entity, limit=20):
-                    username = f"@{participant.username}" if participant.username else ""
-                    name = f"{participant.first_name or ''} {participant.last_name or ''}".strip()
-                    item = QListWidgetItem(f"{username} {name} {participant.id}")
-                    item.setData(Qt.UserRole, participant.id)
-                    if participant.status:
-                        item.setForeground(Qt.green)
-                    self.participants_list.addItem(item)
-            state.participants_cache[chat_id] = self.participants_list.count()
+                # Для групп и каналов
+                try:
+                    async for participant in state.client.iter_participants(entity, limit=20):
+                        username = participant.username if participant.username else ""
+                        first_name = participant.first_name if participant.first_name else ""
+                        last_name = participant.last_name if participant.last_name else ""
+                        # Сохраняем в базу и кэш
+                        save_user(participant.id, username, first_name, last_name)
+                        state.user_cache[participant.id] = (username, first_name, last_name)
+                        save_chat_participant(chat_id, participant.id)
+                        state.participant_to_chats.setdefault(participant.id, []).append(chat_id)
+                        state.participant_to_chats[participant.id] = list(set(state.participant_to_chats[participant.id]))
+                        # Отображаем в списке
+                        prefix = "(Я) " if participant.id == my_id else ""
+                        item = QListWidgetItem(f"{prefix}{f'@{username}' if username else ''} {first_name} {last_name} {participant.id}")
+                        item.setData(Qt.UserRole, participant.id)
+                        if participant.status:
+                            item.setForeground(Qt.green)
+                        self.participants_list.addItem(item)
+                    state.participants_cache[chat_id] = self.participants_list.count()
+                except telethon.errors.ChatAdminRequiredError:
+                    # Если нет прав администратора, показываем заглушку
+                    self.participants_list.addItem("Нельзя получить участников")
+                    state.participants_cache[chat_id] = 0
         except Exception as e:
             self.participants_list.addItem(f"Ошибка: {str(e)}")
         finally:
@@ -2637,6 +3041,8 @@ class ChatSettingsWindow(QMainWindow):
     def clear_cache(self):
         state.chat_cache.clear()
         state.participants_cache.clear()
+        state.user_cache.clear()
+        state.participant_to_chats.clear()
         self.participants_list.clear()
         self.filter_all_chats()
         self.filter_selected_chats()
@@ -2670,7 +3076,25 @@ class ChatSettingsWindow(QMainWindow):
         self.auth_window = AuthWindow()
         self.auth_window.show()
 
-class ResponsesDialog(QDialog):
+    def remove_chat_by_id(self, chat_id, reason=""):
+        for i in range(self.selected_chats_list.count()):
+            item = self.selected_chats_list.item(i)
+            if item.data(Qt.UserRole) == chat_id:
+                chat_title = item.text().split(" ", 1)[1] if " " in item.text() else str(chat_id)
+                remove_selected_chat(chat_id)
+                self.selected_chats_list.takeItem(i)
+                self.selected_chats_label.setText(f"Добавленные чаты: {self.selected_chats_list.count()}")
+                self.next_button.setEnabled(self.selected_chats_list.count() > 0)
+                self.filter_all_chats()  # Обновляем список "Общие чаты"
+                if reason:
+                    self.update_notification.setText(f"Чат {chat_title} удалён: {reason}")
+                    self.update_notification.setStyleSheet("color: #FF0000;")
+                    self.update_notification.setVisible(True)
+                    QTimer.singleShot(3000, lambda: self.update_notification.setVisible(False))
+                logging.info(f"Чат {chat_title} (ID: {chat_id}) удалён из добавленных: {reason}")
+                break
+
+class ResponsesDialog(QDialog, MenuBarMixin):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Настройка ответов")
@@ -2741,6 +3165,9 @@ class ResponsesDialog(QDialog):
         layout.addWidget(self.ok_button, alignment=Qt.AlignCenter)
 
         self.setLayout(layout)
+
+        # Добавляем меню-бар через миксин
+        self.setup_menu_bar()
 
         # Анимация для ползунка
         self.slider_animation = QPropertyAnimation(self.slider, b"geometry")
@@ -2829,15 +3256,19 @@ class ResponsesDialog(QDialog):
             self.slider_animation.setEndValue(QRect(2, 2, 24, 24))
         self.slider_animation.start()
 
-class ControlPanelWindow(QMainWindow):
+class ControlPanelWindow(QMainWindow, MenuBarMixin):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Telegram Bot - Панель управления")
-        self.setFixedSize(600, 600)
+        self.setFixedSize(600, 650)
         screen = QApplication.primaryScreen().geometry()
         self.move((screen.width() - self.width()) // 2, (screen.height() - self.height()) // 2)
         widget = QWidget()
         self.setCentralWidget(widget)
+
+        # Добавляем меню-бар через миксин
+        self.setup_menu_bar()
+
         layout = QVBoxLayout(widget)
 
         # Установка иконки для окна
@@ -3119,6 +3550,37 @@ class ControlPanelWindow(QMainWindow):
         self.uptime_label.setText(f"Время работы: ⏰ {hours:02d}:{minutes:02d}:{seconds:02d}")
 
     async def message_handler(self, event):
+        # Проверка сигнатуры в сообщениях
+        message = event.message
+        chat_id = event.chat_id
+        if message.text and "[BotSignature:" in message.text:
+            import re
+            match = re.search(r"\[BotSignature:([^\]]+)\]", message.text)
+            if match:
+                signature_id = match.group(1)
+                if signature_id != state.bot_signature_id:
+                    # Чат обрабатывается другим ботом
+                    if chat_id in {chat_id for chat_id, _, _ in get_selected_chats()}:
+                        logging.info(f"Обнаружен конфликт: чат {chat_id} обрабатывается другим ботом (signature_id={signature_id})")
+                        app = QApplication.instance()
+                        chat_settings_window = None
+                        for window in app.topLevelWidgets():
+                            if isinstance(window, ChatSettingsWindow):
+                                chat_settings_window = window
+                                break
+                        if chat_settings_window:
+                            chat_settings_window.remove_chat_by_id(chat_id, "уже обрабатывается другим ботом")
+                        else:
+                            # Если окно ChatSettingsWindow не открыто, удаляем чат напрямую
+                            for chat in get_selected_chats():
+                                if chat[0] == chat_id:
+                                    chat_title = chat[1]
+                                    remove_selected_chat(chat_id)
+                                    logging.info(f"Чат {chat_title} (ID: {chat_id}) удалён из добавленных: уже обрабатывается другим ботом")
+                                    break
+            return  # Пропускаем обработку, если это сообщение от бота
+
+        # Оригинальная логика обработки сообщений
         if event.message.text:
             if len(state.active_tasks) >= 5:
                 logging.warning("Достигнут лимит одновременно выполняемых задач, пропускаем обработку")
@@ -3262,6 +3724,50 @@ def main():
             background-color: #404040; 
             color: #A9A9A9; 
         }
+        QPushButton#connect_button { 
+            background-color: #506050; 
+            color: #FFFFFF; 
+        }
+        QPushButton#connect_button:hover { 
+            background-color: #607060; 
+        }
+        QPushButton#connect_button:disabled { 
+            background-color: #404040; 
+            color: #A9A9A9; 
+        }
+        QPushButton#clear_button { 
+            background-color: #605050; 
+            color: #FFFFFF; 
+        }
+        QPushButton#clear_button:hover { 
+            background-color: #706060; 
+        }
+        QPushButton#clear_button:disabled { 
+            background-color: #404040; 
+            color: #A9A9A9; 
+        }
+        QPushButton#add_all_button, QPushButton#add_button { 
+            background-color: #506050;  /* Зеленоватый оттенок */
+            color: #FFFFFF; 
+        }
+        QPushButton#add_all_button:hover, QPushButton#add_button:hover { 
+            background-color: #607060; 
+        }
+        QPushButton#add_all_button:disabled, QPushButton#add_button:disabled { 
+            background-color: #404040; 
+            color: #A9A9A9; 
+        }
+        QPushButton#remove_all_button, QPushButton#remove_button { 
+            background-color: #605050;  /* Красноватый оттенок */
+            color: #FFFFFF; 
+        }
+        QPushButton#remove_all_button:hover, QPushButton#remove_button:hover { 
+            background-color: #706060; 
+        }
+        QPushButton#remove_all_button:disabled, QPushButton#remove_button:disabled { 
+            background-color: #404040; 
+            color: #A9A9A9; 
+        }
         QPushButton#next_button, QPushButton#back_button, QPushButton#configure_responses_button, QPushButton#back_button_control { 
             padding: 10px; 
             border: 2px solid #FFFFFF;
@@ -3270,11 +3776,11 @@ def main():
             border: 2px solid #D3D3D3;
         }
         QPushButton#update_button { 
-            background-color: #00CC00; 
+            background-color: #505050; 
             color: #FFFFFF; 
         }
         QPushButton#update_button:hover { 
-            background-color: #00FF00; 
+            background-color: #606060; 
         }
         QWidget#switch_container { 
             background-color: #E0E0E0; 
@@ -3290,6 +3796,13 @@ def main():
         }
         QLabel { 
             color: #D3D3D3; 
+        }
+        QLabel#info_icon { 
+            color: #00BFFF; 
+            font-size: 14px; 
+        }
+        QLabel#info_icon:hover { 
+            color: #1E90FF; 
         }
         QProgressBar { 
             background-color: #404040; 
