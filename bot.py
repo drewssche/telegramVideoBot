@@ -425,10 +425,6 @@ async def update_progress_bar_video(chat_id, message_id, url, platform, download
     return True
 
 async def process_video(chat_id, message_id, url, platform, max_duration, message, sender_info):
-    # Добавляем рандомную задержку от 0.5 до 2 секунд
-    import random
-    await asyncio.sleep(random.uniform(0.5, 2.0))
-
     # Проверяем, отправлено ли сообщение текущим пользователем
     can_edit = message.sender_id == state.current_user_id
     if can_edit:
@@ -573,11 +569,11 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
             ]
             with open(final_file, 'rb') as video:
                 logging.info(f"Отправка видео {url} ({platform}) {sender_info} в чат '{chat_title}' (тип: {chat_type})")
-                # Редактируем сообщение с прогресс-баром, добавляя видео
+                # Редактируем сообщение с прогресс-баром, добавляя видео и исходную ссылку
                 await state.client.edit_message(
                     chat_id,
                     progress_msg.id,
-                    f"{platform}\n[BotSignature:{state.bot_signature_id}]",
+                    f"{platform}\nИсходная ссылка: {url}\n[BotSignature:{state.bot_signature_id}]",
                     file=video,
                     attributes=attributes,
                     force_document=False
@@ -619,10 +615,6 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
                     logging.error(f"Не удалось удалить файл {f} после нескольких попыток")
 
 async def process_video_link(chat_id, message_id, text, message):
-    # Добавляем рандомную задержку от 0.5 до 2 секунд
-    import random
-    await asyncio.sleep(random.uniform(0.5, 2.0))
-
     platform_settings = get_platform_settings()
 
     # Получаем информацию о чате для логирования
@@ -3123,24 +3115,6 @@ class ChatSettingsWindow(QMainWindow, MenuBarMixin):
         self.auth_window = AuthWindow()
         self.auth_window.show()
 
-    def remove_chat_by_id(self, chat_id, reason=""):
-        for i in range(self.selected_chats_list.count()):
-            item = self.selected_chats_list.item(i)
-            if item.data(Qt.UserRole) == chat_id:
-                chat_title = item.text().split(" ", 1)[1] if " " in item.text() else str(chat_id)
-                remove_selected_chat(chat_id)
-                self.selected_chats_list.takeItem(i)
-                self.selected_chats_label.setText(f"Добавленные чаты: {self.selected_chats_list.count()}")
-                self.next_button.setEnabled(self.selected_chats_list.count() > 0)
-                self.filter_all_chats()  # Обновляем список "Общие чаты"
-                if reason:
-                    self.update_notification.setText(f"Чат {chat_title} удалён: {reason}")
-                    self.update_notification.setStyleSheet("color: #FF0000;")
-                    self.update_notification.setVisible(True)
-                    QTimer.singleShot(3000, lambda: self.update_notification.setVisible(False))
-                logging.info(f"Чат {chat_title} (ID: {chat_id}) удалён из добавленных: {reason}")
-                break
-
 class ResponsesDialog(QDialog, MenuBarMixin):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -3596,47 +3570,50 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
         minutes, seconds = divmod(remainder, 60)
         self.uptime_label.setText(f"Время работы: ⏰ {hours:02d}:{minutes:02d}:{seconds:02d}")
 
-    async def message_handler(self, event):
-        # Проверка сигнатуры в сообщениях
-        message = event.message
+    @state.client.on(events.NewMessage)
+    async def message_handler(event):
         chat_id = event.chat_id
-        if message.text and "[BotSignature:" in message.text:
-            import re
-            match = re.search(r"\[BotSignature:([^\]]+)\]", message.text)
-            if match:
-                signature_id = match.group(1)
-                if signature_id != state.bot_signature_id:
-                    # Чат обрабатывается другим ботом
-                    if chat_id in {chat_id for chat_id, _, _ in get_selected_chats()}:
-                        logging.info(f"Обнаружен конфликт: чат {chat_id} обрабатывается другим ботом (signature_id={signature_id})")
-                        app = QApplication.instance()
-                        chat_settings_window = None
-                        for window in app.topLevelWidgets():
-                            if isinstance(window, ChatSettingsWindow):
-                                chat_settings_window = window
-                                break
-                        if chat_settings_window:
-                            chat_settings_window.remove_chat_by_id(chat_id, "уже обрабатывается другим ботом")
-                        else:
-                            # Если окно ChatSettingsWindow не открыто, удаляем чат напрямую
-                            for chat in get_selected_chats():
-                                if chat[0] == chat_id:
-                                    chat_title = chat[1]
-                                    remove_selected_chat(chat_id)
-                                    logging.info(f"Чат {chat_title} (ID: {chat_id}) удалён из добавленных: уже обрабатывается другим ботом")
-                                    break
-            return  # Пропускаем обработку, если это сообщение от бота
+        message = event.message
+        text = message.text
 
-        # Оригинальная логика обработки сообщений
-        if event.message.text:
+        # Проверяем, включена ли обработка
+        if not state.is_processing_enabled:
+            return
+
+        # Проверяем, добавлен ли чат в список для обработки
+        if chat_id not in {chat_id for chat_id, _, _ in get_selected_chats()}:
+            return
+
+        # Проверяем, есть ли в сообщении сигнатура бота
+        signature_match = re.search(r'\[BotSignature:(\d+)\]', text)
+        if signature_match:
+            signature_id = int(signature_match.group(1))
+            if signature_id != state.bot_signature_id:
+                return  # Пропускаем обработку, если это сообщение от другого бота
+            return  # Пропускаем обработку, если это сообщение от текущего бота
+
+        # Проверяем, есть ли в сообщении текст
+        if not text:
+            return
+
+        # Проверяем, есть ли в сообщении ссылка
+        link_found = False
+        for pattern_name, pattern in VIDEO_URL_PATTERNS.items():
+            if pattern.search(text):
+                link_found = True
+                break
+        if not link_found:
+            return
+
+        # Если сообщение отправлено текущим пользователем, обрабатываем сразу
+        if message.sender_id == state.current_user_id:
             if len(state.active_tasks) >= 5:
                 logging.warning("Достигнут лимит одновременно выполняемых задач, пропускаем обработку")
                 return
-            task = asyncio.create_task(process_video_link(event.chat_id, event.id, event.message.text, event.message))
+            task = asyncio.create_task(process_video_link(chat_id, message.id, text, message))
             state.active_tasks.append(task)
             try:
                 success = await task
-                chat_id = event.chat_id
                 if success:
                     if chat_id in state.links_processed_per_chat:
                         state.links_processed_per_chat[chat_id] += 1
@@ -3647,9 +3624,81 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                         state.errors_per_chat[chat_id] += 1
                     else:
                         state.errors_per_chat[chat_id] = 1
-                self.update_chats_stats()
+                # Проверяем, есть ли self и метод update_chats_stats
+                app = QApplication.instance()
+                control_panel = None
+                for window in app.topLevelWidgets():
+                    if isinstance(window, ControlPanelWindow):
+                        control_panel = window
+                        break
+                if control_panel:
+                    control_panel.update_chats_stats()
             finally:
                 state.active_tasks.remove(task)
+            return
+
+        # Если сообщение от другого пользователя, добавляем в очередь с задержкой
+        import random
+        await asyncio.sleep(random.uniform(0.5, 3.0))  # Рандомная задержка 0.5–3 секунды
+
+        # Проверяем, есть ли в самом сообщении сигнатура (маловероятно, но на всякий случай)
+        signature_match = re.search(r'\[BotSignature:(\d+)\]', message.text)
+        if signature_match:
+            signature_id = int(signature_match.group(1))
+            if signature_id != state.bot_signature_id:
+                return  # Игнорируем сообщение, если в нём есть сигнатура другого бота
+
+        # Ждём до 4 секунд, чтобы получить следующее сообщение
+        import time
+        start_time = time.time()
+        next_message = None
+        while time.time() - start_time < 4:
+            messages = await state.client.get_messages(chat_id, offset_id=message.id, limit=1)
+            if messages and messages[0].id > message.id:
+                next_message = messages[0]
+                break
+            await asyncio.sleep(0.5)  # Проверяем каждые 0.5 секунды
+
+        # Если следующее сообщение найдено, проверяем, является ли оно ответом
+        if next_message:
+            if getattr(next_message, 'reply_to_msg_id', None) == message.id:
+                # Проверяем сигнатуру в следующем сообщении
+                next_text = next_message.text or ""
+                signature_match = re.search(r'\[BotSignature:(\d+)\]', next_text)
+                if signature_match:
+                    signature_id = int(signature_match.group(1))
+                    if signature_id != state.bot_signature_id:
+                        return  # Игнорируем сообщение, если в ответе есть сигнатура другого бота
+
+        # Если сигнатуры нет, начинаем обработку
+        if len(state.active_tasks) >= 5:
+            logging.warning("Достигнут лимит одновременно выполняемых задач, пропускаем обработку")
+            return
+        task = asyncio.create_task(process_video_link(chat_id, message.id, text, message))
+        state.active_tasks.append(task)
+        try:
+            success = await task
+            if success:
+                if chat_id in state.links_processed_per_chat:
+                    state.links_processed_per_chat[chat_id] += 1
+                else:
+                    state.links_processed_per_chat[chat_id] = 1
+            else:
+                if chat_id in state.errors_per_chat:
+                    state.errors_per_chat[chat_id] += 1
+                else:
+                    state.errors_per_chat[chat_id] = 1
+            # Проверяем, есть ли self и метод update_chats_stats
+            app = QApplication.instance()
+            control_panel = None
+            for window in app.topLevelWidgets():
+                if isinstance(window, ControlPanelWindow):
+                    control_panel = window
+                    break
+            if control_panel:
+                control_panel.update_chats_stats()
+        finally:
+            state.active_tasks.remove(task)
 
     def setup_logging(self):
         handler = QListWidgetHandler(self.log_list)
