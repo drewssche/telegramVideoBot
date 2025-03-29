@@ -3570,14 +3570,13 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
         minutes, seconds = divmod(remainder, 60)
         self.uptime_label.setText(f"Время работы: ⏰ {hours:02d}:{minutes:02d}:{seconds:02d}")
 
-    @state.client.on(events.NewMessage)
-    async def message_handler(event):
+    async def message_handler(self, event):
         chat_id = event.chat_id
         message = event.message
         text = message.text
 
         # Проверяем, включена ли обработка
-        if not state.is_processing_enabled:
+        if not state.switch_is_on:
             return
 
         # Проверяем, добавлен ли чат в список для обработки
@@ -3624,15 +3623,7 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                         state.errors_per_chat[chat_id] += 1
                     else:
                         state.errors_per_chat[chat_id] = 1
-                # Проверяем, есть ли self и метод update_chats_stats
-                app = QApplication.instance()
-                control_panel = None
-                for window in app.topLevelWidgets():
-                    if isinstance(window, ControlPanelWindow):
-                        control_panel = window
-                        break
-                if control_panel:
-                    control_panel.update_chats_stats()
+                self.update_chats_stats()
             finally:
                 state.active_tasks.remove(task)
             return
@@ -3688,15 +3679,7 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                     state.errors_per_chat[chat_id] += 1
                 else:
                     state.errors_per_chat[chat_id] = 1
-            # Проверяем, есть ли self и метод update_chats_stats
-            app = QApplication.instance()
-            control_panel = None
-            for window in app.topLevelWidgets():
-                if isinstance(window, ControlPanelWindow):
-                    control_panel = window
-                    break
-            if control_panel:
-                control_panel.update_chats_stats()
+            self.update_chats_stats()
         finally:
             state.active_tasks.remove(task)
 
