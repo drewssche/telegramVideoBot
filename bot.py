@@ -347,6 +347,7 @@ class AppState:
         self.responses_enabled = True
         self.current_user_id = None  # Добавляем поле для ID текущего пользователя
         self.bot_signature_id = None
+        self.processing_links = set()
 
     async def ensure_client_disconnected(self):
         if self.client is not None:
@@ -3612,64 +3613,72 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
             logging.info("Сообщение не содержит ссылку, пропускаем")
             return
 
-        # Если сообщение отправлено текущим пользователем, обрабатываем сразу
-        if message.sender_id == state.current_user_id:
-            logging.info("Сообщение от текущего пользователя, начинаем обработку")
-            if len(state.active_tasks) >= 5:
-                logging.warning("Достигнут лимит одновременно выполняемых задач, пропускаем обработку")
-                return
-            task = asyncio.create_task(process_video_link(chat_id, message.id, text, message))
-            state.active_tasks.append(task)
-            try:
-                success = await task
-                if success:
-                    if chat_id in state.links_processed_per_chat:
-                        state.links_processed_per_chat[chat_id] += 1
-                    else:
-                        state.links_processed_per_chat[chat_id] = 1
-                else:
-                    if chat_id in state.errors_per_chat:
-                        state.errors_per_chat[chat_id] += 1
-                    else:
-                        state.errors_per_chat[chat_id] = 1
-                self.update_chats_stats()
-            finally:
-                state.active_tasks.remove(task)
-            return
-
-        # Если сообщение от другого пользователя, проверяем, не начал ли другой бот обработку
-        logging.info("Сообщение от другого пользователя, проверяем, не начал ли другой бот обработку")
+        # Проверяем, не обрабатывается ли эта ссылка уже (для всех сообщений)
         import time
+        import random
 
-        # Ждём до 6 секунд, чтобы проверить, не появилось ли сообщение с сигнатурой от другого бота
-        start_time = time.time()
-        while time.time() - start_time < 6:  # Увеличиваем время ожидания до 6 секунд
-            messages = await state.client.get_messages(chat_id, offset_id=message.id, limit=1)
-            if messages and messages[0].id > message.id:
-                next_message = messages[0]
-                next_text = next_message.text or ""
-                signature_match = re.search(r'\[BotSignature:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]', next_text)
+        # Если сообщение от другого пользователя, добавляем случайную задержку перед проверкой
+        if message.sender_id != state.current_user_id:
+            logging.info("Сообщение от другого пользователя, добавляем случайную задержку перед проверкой")
+            random_delay = random.uniform(0, 2)  # Случайная задержка от 0 до 2 секунд
+            logging.info(f"Случайная задержка: {random_delay:.2f} секунд")
+            await asyncio.sleep(random_delay)
+
+            logging.info("Проверяем, не начал ли другой бот обработку")
+            start_time = time.time()
+            while time.time() - start_time < 2:  # Ожидание 2 секунды
+                # Проверяем, не обрабатывается ли ссылка
+                if text in state.processing_links:
+                    logging.info(f"Ссылка {text} уже обрабатывается другим ботом, пропускаем")
+                    return
+
+                # Проверяем, не появилось ли сообщение с сигнатурой от другого бота
+                messages = await state.client.get_messages(chat_id, offset_id=message.id, limit=1)
+                if messages and messages[0].id > message.id:
+                    next_message = messages[0]
+                    next_text = next_message.text or ""
+                    signature_match = re.search(r'\[BotSignature:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]', next_text)
+                    if signature_match:
+                        signature_id = signature_match.group(1)
+                        logging.info(f"Обнаружена сигнатура в следующем сообщении: {signature_id}")
+                        if signature_id != state.bot_signature_id:
+                            logging.info(f"Другой бот (сигнатура {signature_id}) уже обрабатывает ссылку, пропускаем")
+                            return  # Пропускаем, если другой бот уже начал обработку
+                await asyncio.sleep(0.5)  # Проверяем каждые 0.5 секунды
+
+            # После ожидания перепроверяем исходное сообщение на наличие сигнатуры
+            updated_message = await state.client.get_messages(chat_id, ids=message.id)
+            if updated_message:
+                updated_text = updated_message.text or ""  # Исправлено: убираем [0]
+                signature_match = re.search(r'\[BotSignature:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]', updated_text)
                 if signature_match:
                     signature_id = signature_match.group(1)
-                    logging.info(f"Обнаружена сигнатура в следующем сообщении: {signature_id}")
+                    logging.info(f"Обнаружена сигнатура в обновлённом исходном сообщении: {signature_id}")
                     if signature_id != state.bot_signature_id:
                         logging.info(f"Другой бот (сигнатура {signature_id}) уже обрабатывает ссылку, пропускаем")
                         return  # Пропускаем, если другой бот уже начал обработку
-            await asyncio.sleep(0.5)  # Проверяем каждые 0.5 секунды
 
-        # Если за 6 секунд не появилось сообщение от другого бота, начинаем обработку
-        logging.info("Другой бот не начал обработку, начинаем обработку")
+        # Если сообщение от текущего пользователя, всё равно проверяем state.processing_links
+        else:
+            logging.info("Сообщение от текущего пользователя, проверяем, не обрабатывается ли ссылка")
+            if text in state.processing_links:
+                logging.info(f"Ссылка {text} уже обрабатывается другим ботом, пропускаем")
+                return
+
+        # Если дошли сюда, начинаем обработку
+        logging.info("Начинаем обработку")
         if len(state.active_tasks) >= 5:
             logging.warning("Достигнут лимит одновременно выполняемых задач, пропускаем обработку")
             return
 
         # Запускаем обработку как задачу, которую можно отменить
+        state.processing_links.add(text)  # Добавляем ссылку в обработку
         task = asyncio.create_task(process_video_link(chat_id, message.id, text, message))
         state.active_tasks.append(task)
 
         # Ждём ещё 2 секунды, чтобы убедиться, что другой бот не начал обработку
         start_time = time.time()
-        while time.time() - start_time < 2:
+        while time.time() - start_time < 2:  # Ожидание 2 секунды
             messages = await state.client.get_messages(chat_id, offset_id=message.id, limit=1)
             if messages and messages[0].id > message.id:
                 next_message = messages[0]
@@ -3681,6 +3690,7 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                         logging.info(f"Другой бот (сигнатура {signature_id}) начал обработку, отменяем свою задачу")
                         task.cancel()  # Отменяем задачу
                         state.active_tasks.remove(task)
+                        state.processing_links.remove(text)  # Удаляем ссылку из обработки
                         return
             await asyncio.sleep(0.5)
 
@@ -3703,6 +3713,8 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
         finally:
             if task in state.active_tasks:
                 state.active_tasks.remove(task)
+            if text in state.processing_links:
+                state.processing_links.remove(text)  # Удаляем ссылку из обработки
 
     def setup_logging(self):
         handler = QListWidgetHandler(self.log_list)
