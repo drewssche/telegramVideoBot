@@ -3577,9 +3577,9 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
         text = message.text or ""  # Убедимся, что text не None
 
         # Проверяем, есть ли в сообщении сигнатура бота (в самом начале)
-        signature_match = re.search(r'\[BotSignature:(\d+)\]', text)
+        signature_match = re.search(r'\[BotSignature:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]', text)
         if signature_match:
-            signature_id = int(signature_match.group(1))
+            signature_id = signature_match.group(1)
             logging.info(f"Обнаружена сигнатура: {signature_id}, моя сигнатура: {state.bot_signature_id}")
             if signature_id != state.bot_signature_id:
                 logging.info(f"Сообщение от другого бота (сигнатура {signature_id}), пропускаем")
@@ -3637,43 +3637,54 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                 state.active_tasks.remove(task)
             return
 
-        # Если сообщение от другого пользователя, добавляем в очередь с задержкой
-        logging.info("Сообщение от другого пользователя, добавляем в очередь с задержкой")
-        import random
-        await asyncio.sleep(random.uniform(0.5, 3.0))  # Рандомная задержка 0.5–3 секунды
-
-        # Ждём до 4 секунд, чтобы получить следующее сообщение
+        # Если сообщение от другого пользователя, проверяем, не начал ли другой бот обработку
+        logging.info("Сообщение от другого пользователя, проверяем, не начал ли другой бот обработку")
         import time
+
+        # Ждём до 6 секунд, чтобы проверить, не появилось ли сообщение с сигнатурой от другого бота
         start_time = time.time()
-        next_message = None
-        while time.time() - start_time < 4:
+        while time.time() - start_time < 6:  # Увеличиваем время ожидания до 6 секунд
             messages = await state.client.get_messages(chat_id, offset_id=message.id, limit=1)
             if messages and messages[0].id > message.id:
                 next_message = messages[0]
-                break
-            await asyncio.sleep(0.5)  # Проверяем каждые 0.5 секунды
-
-        # Если следующее сообщение найдено, проверяем, является ли оно ответом
-        if next_message:
-            logging.info(f"Найдено следующее сообщение: {next_message.id}")
-            if getattr(next_message, 'reply_to_msg_id', None) == message.id:
-                # Проверяем сигнатуру в следующем сообщении
                 next_text = next_message.text or ""
-                signature_match = re.search(r'\[BotSignature:(\d+)\]', next_text)
+                signature_match = re.search(r'\[BotSignature:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]', next_text)
                 if signature_match:
-                    signature_id = int(signature_match.group(1))
+                    signature_id = signature_match.group(1)
                     logging.info(f"Обнаружена сигнатура в следующем сообщении: {signature_id}")
                     if signature_id != state.bot_signature_id:
-                        logging.info(f"Следующее сообщение от другого бота (сигнатура {signature_id}), пропускаем")
-                        return  # Игнорируем сообщение, если в ответе есть сигнатура другого бота
+                        logging.info(f"Другой бот (сигнатура {signature_id}) уже обрабатывает ссылку, пропускаем")
+                        return  # Пропускаем, если другой бот уже начал обработку
+            await asyncio.sleep(0.5)  # Проверяем каждые 0.5 секунды
 
-        # Если сигнатуры нет, начинаем обработку
-        logging.info("Сигнатуры нет, начинаем обработку")
+        # Если за 6 секунд не появилось сообщение от другого бота, начинаем обработку
+        logging.info("Другой бот не начал обработку, начинаем обработку")
         if len(state.active_tasks) >= 5:
             logging.warning("Достигнут лимит одновременно выполняемых задач, пропускаем обработку")
             return
+
+        # Запускаем обработку как задачу, которую можно отменить
         task = asyncio.create_task(process_video_link(chat_id, message.id, text, message))
         state.active_tasks.append(task)
+
+        # Ждём ещё 2 секунды, чтобы убедиться, что другой бот не начал обработку
+        start_time = time.time()
+        while time.time() - start_time < 2:
+            messages = await state.client.get_messages(chat_id, offset_id=message.id, limit=1)
+            if messages and messages[0].id > message.id:
+                next_message = messages[0]
+                next_text = next_message.text or ""
+                signature_match = re.search(r'\[BotSignature:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]', next_text)
+                if signature_match:
+                    signature_id = signature_match.group(1)
+                    if signature_id != state.bot_signature_id:
+                        logging.info(f"Другой бот (сигнатура {signature_id}) начал обработку, отменяем свою задачу")
+                        task.cancel()  # Отменяем задачу
+                        state.active_tasks.remove(task)
+                        return
+            await asyncio.sleep(0.5)
+
+        # Если задача не была отменена, ждём её завершения
         try:
             success = await task
             if success:
@@ -3687,8 +3698,11 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                 else:
                     state.errors_per_chat[chat_id] = 1
             self.update_chats_stats()
+        except asyncio.CancelledError:
+            logging.info("Задача обработки была отменена из-за другого бота")
         finally:
-            state.active_tasks.remove(task)
+            if task in state.active_tasks:
+                state.active_tasks.remove(task)
 
     def setup_logging(self):
         handler = QListWidgetHandler(self.log_list)
