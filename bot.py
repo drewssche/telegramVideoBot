@@ -630,7 +630,7 @@ async def process_video_link(chat_id, message_id, text, message):
     # Получаем информацию об отправителе
     try:
         sender = await message.get_sender()
-        sender_info = f"для @{sender.username or 'нет_юзернейма'} {sender.first_name or ''} {sender.last_name or ''}".strip()
+        sender_info = f"для @{sender.username or ''} {sender.first_name or ''} {sender.last_name or ''}".strip()
     except Exception as e:
         logging.error(f"Не удалось получить информацию об отправителе сообщения {message_id} в чате {chat_id}: {str(e)}")
         sender_info = "для неизвестного пользователя"
@@ -3571,28 +3571,35 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
         self.uptime_label.setText(f"Время работы: ⏰ {hours:02d}:{minutes:02d}:{seconds:02d}")
 
     async def message_handler(self, event):
+        logging.info(f"Получено новое сообщение в чате {event.chat_id}: {event.message.text}")
         chat_id = event.chat_id
         message = event.message
-        text = message.text
+        text = message.text or ""  # Убедимся, что text не None
+
+        # Проверяем, есть ли в сообщении сигнатура бота (в самом начале)
+        signature_match = re.search(r'\[BotSignature:(\d+)\]', text)
+        if signature_match:
+            signature_id = int(signature_match.group(1))
+            logging.info(f"Обнаружена сигнатура: {signature_id}, моя сигнатура: {state.bot_signature_id}")
+            if signature_id != state.bot_signature_id:
+                logging.info(f"Сообщение от другого бота (сигнатура {signature_id}), пропускаем")
+                return  # Пропускаем обработку, если это сообщение от другого бота
+            logging.info(f"Сообщение от текущего бота (сигнатура {signature_id}), пропускаем")
+            return  # Пропускаем обработку, если это сообщение от текущего бота
 
         # Проверяем, включена ли обработка
         if not state.switch_is_on:
+            logging.info("Обработка выключена, пропускаем")
             return
 
         # Проверяем, добавлен ли чат в список для обработки
         if chat_id not in {chat_id for chat_id, _, _ in get_selected_chats()}:
+            logging.info(f"Чат {chat_id} не в списке выбранных, пропускаем")
             return
-
-        # Проверяем, есть ли в сообщении сигнатура бота
-        signature_match = re.search(r'\[BotSignature:(\d+)\]', text)
-        if signature_match:
-            signature_id = int(signature_match.group(1))
-            if signature_id != state.bot_signature_id:
-                return  # Пропускаем обработку, если это сообщение от другого бота
-            return  # Пропускаем обработку, если это сообщение от текущего бота
 
         # Проверяем, есть ли в сообщении текст
         if not text:
+            logging.info("Сообщение не содержит текст, пропускаем")
             return
 
         # Проверяем, есть ли в сообщении ссылка
@@ -3602,10 +3609,12 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                 link_found = True
                 break
         if not link_found:
+            logging.info("Сообщение не содержит ссылку, пропускаем")
             return
 
         # Если сообщение отправлено текущим пользователем, обрабатываем сразу
         if message.sender_id == state.current_user_id:
+            logging.info("Сообщение от текущего пользователя, начинаем обработку")
             if len(state.active_tasks) >= 5:
                 logging.warning("Достигнут лимит одновременно выполняемых задач, пропускаем обработку")
                 return
@@ -3629,15 +3638,9 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
             return
 
         # Если сообщение от другого пользователя, добавляем в очередь с задержкой
+        logging.info("Сообщение от другого пользователя, добавляем в очередь с задержкой")
         import random
         await asyncio.sleep(random.uniform(0.5, 3.0))  # Рандомная задержка 0.5–3 секунды
-
-        # Проверяем, есть ли в самом сообщении сигнатура (маловероятно, но на всякий случай)
-        signature_match = re.search(r'\[BotSignature:(\d+)\]', message.text)
-        if signature_match:
-            signature_id = int(signature_match.group(1))
-            if signature_id != state.bot_signature_id:
-                return  # Игнорируем сообщение, если в нём есть сигнатура другого бота
 
         # Ждём до 4 секунд, чтобы получить следующее сообщение
         import time
@@ -3652,16 +3655,20 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
 
         # Если следующее сообщение найдено, проверяем, является ли оно ответом
         if next_message:
+            logging.info(f"Найдено следующее сообщение: {next_message.id}")
             if getattr(next_message, 'reply_to_msg_id', None) == message.id:
                 # Проверяем сигнатуру в следующем сообщении
                 next_text = next_message.text or ""
                 signature_match = re.search(r'\[BotSignature:(\d+)\]', next_text)
                 if signature_match:
                     signature_id = int(signature_match.group(1))
+                    logging.info(f"Обнаружена сигнатура в следующем сообщении: {signature_id}")
                     if signature_id != state.bot_signature_id:
+                        logging.info(f"Следующее сообщение от другого бота (сигнатура {signature_id}), пропускаем")
                         return  # Игнорируем сообщение, если в ответе есть сигнатура другого бота
 
         # Если сигнатуры нет, начинаем обработку
+        logging.info("Сигнатуры нет, начинаем обработку")
         if len(state.active_tasks) >= 5:
             logging.warning("Достигнут лимит одновременно выполняемых задач, пропускаем обработку")
             return
