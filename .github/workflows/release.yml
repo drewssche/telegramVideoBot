@@ -1,0 +1,173 @@
+name: Create Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      # Чек-аут репозитория с очисткой
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          clean: true
+
+      # Установка Python
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          check-latest: false
+
+      # Установка зависимостей
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          REM Проверяем наличие ключевых DLL
+          dir C:\hostedtoolcache\windows\Python\3.10.11\x64\Lib\site-packages\PySide6\Qt6Core.dll || echo "Qt6Core.dll not found"
+          dir C:\hostedtoolcache\windows\Python\3.10.11\x64\Lib\site-packages\PySide6\libstdc++-6.dll || echo "libstdc++-6.dll not found"
+          REM Проверяем установленные версии новых зависимостей
+          pip show pynvml
+          pip show psutil
+          pip list
+        shell: cmd
+
+      # Установка 7-Zip
+      - name: Install 7-Zip
+        run: |
+          choco install 7zip -y
+        shell: cmd
+
+      # Создание манифеста для запуска с правами администратора
+      - name: Create manifest file
+        run: |
+          echo ^<?xml version="1.0" encoding="UTF-8" standalone="yes"?^> > VideoBot.exe.manifest
+          echo ^<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0"^> >> VideoBot.exe.manifest
+          echo ^    ^<trustInfo xmlns="urn:schemas-microsoft-com:asm.v3"^> >> VideoBot.exe.manifest
+          echo ^        ^<security^> >> VideoBot.exe.manifest
+          echo ^            ^<requestedPrivileges^> >> VideoBot.exe.manifest
+          echo ^                ^<requestedExecutionLevel level="requireAdministrator" uiAccess="false"/^> >> VideoBot.exe.manifest
+          echo ^            ^</requestedPrivileges^> >> VideoBot.exe.manifest
+          echo ^        ^</security^> >> VideoBot.exe.manifest
+          echo ^    ^</trustInfo^> >> VideoBot.exe.manifest
+          echo ^</assembly^> >> VideoBot.exe.manifest
+          type VideoBot.exe.manifest
+        shell: cmd
+
+      # Проверка кодировки JSON файлов
+      - name: Ensure JSON files are in UTF-8
+        run: |
+          echo import json > ensure_utf8.py
+          echo import sys >> ensure_utf8.py
+          echo files = ['version.json', 'help_content.json'] >> ensure_utf8.py
+          echo for file in files: >> ensure_utf8.py
+          echo     try: >> ensure_utf8.py
+          echo         with open(file, 'r', encoding='utf-8') as f: json.load(f) >> ensure_utf8.py
+          echo     except UnicodeDecodeError: >> ensure_utf8.py
+          echo         with open(file, 'r', encoding='cp1251') as f: content = f.read() >> ensure_utf8.py
+          echo         with open(file, 'w', encoding='utf-8') as f: f.write(content) >> ensure_utf8.py
+          python ensure_utf8.py
+        shell: cmd
+
+      # Логирование хэша bot.py перед сборкой
+      - name: Log SHA256 hash of bot.py
+        run: |
+          certutil -hashfile bot.py SHA256 > bot_py_hash.txt
+          type bot_py_hash.txt
+        shell: cmd
+
+      # Извлечение версии и changelog
+      - name: Get version and changelog from version.json
+        id: version
+        env:
+          PYTHONUTF8: 1
+        run: |
+          python get_version.py
+        shell: cmd
+
+      # Минимизированная очистка перед сборкой
+      - name: Clean dist directory
+        run: |
+          if exist "dist" rmdir /s /q "dist"
+          mkdir "dist"
+        shell: cmd
+
+      # Сборка релиза (всегда полная)
+      - name: Build Release
+        run: |
+          set BUILD_TYPE=full
+          REM Очистка перед сборкой
+          python setup.py clean > clean_full.log 2>&1 || (type clean_full.log && exit 1)
+          REM Сборка
+          python setup.py build_exe > build_full.log 2>&1 || (type build_full.log && exit 1)
+          if not exist "VideoBot\VideoBot.exe" (
+            echo "Error: VideoBot.exe was not created during the build"
+            type build_full.log
+            exit 1
+          )
+          certutil -hashfile VideoBot\VideoBot.exe SHA256 > VideoBot_exe_hash.txt
+          type VideoBot_exe_hash.txt
+          REM Логируем размер файла и содержимое папки
+          dir VideoBot\VideoBot.exe
+          dir VideoBot
+          REM Переходим в папку VideoBot и архивируем её содержимое без самой папки
+          cd VideoBot
+          7z a -tzip ..\dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip *
+          cd ..
+          REM Проверяем содержимое архива
+          7z l dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip
+        shell: cmd
+
+      # Вычисление хэша для релиза
+      - name: Generate SHA256 for Release
+        run: |
+          certutil -hashfile dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip SHA256 > dist\VideoBot_v${{ steps.version.outputs.VERSION }}.zip.sha256
+        shell: cmd
+
+      # Проверка существования тега
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          git fetch --tags
+          $tag_exists = git tag -l "v${{ steps.version.outputs.VERSION }}"
+          Write-Host "Tag v${{ steps.version.outputs.VERSION }} exists: $tag_exists"
+          if ($tag_exists) {
+            echo "result=true" >> $env:GITHUB_OUTPUT
+          } else {
+            echo "result=false" >> $env:GITHUB_OUTPUT
+          }
+        shell: powershell
+
+      # Создание релиза и загрузка артефактов
+      - name: Create Release and Upload Assets
+        if: steps.check_tag.outputs.result == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.VERSION }}
+          name: Release v${{ steps.version.outputs.VERSION }}
+          body: |
+            **Version ${{ steps.version.outputs.VERSION }}** 🚀
+            **Changelog:** 📝
+            ${{ steps.version.outputs.CHANGELOG }}
+            **Downloads:**
+            - **Release**: `VideoBot_v${{ steps.version.outputs.VERSION }}.zip`
+            **Requirements:**
+            - FFmpeg: [Download](https://ffmpeg.org/download.html)
+            - Visual C++ Redistributable: [Download](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+            **Note:** Extract the ZIP into a clean VideoBot folder to install or update.
+          files: |
+            dist/VideoBot_v${{ steps.version.outputs.VERSION }}.zip
+            dist/VideoBot_v${{ steps.version.outputs.VERSION }}.zip.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
