@@ -21,11 +21,18 @@ with open("version.json", "r", encoding="utf-8") as f:
 base = "Win32GUI" if sys.platform == "win32" else None
 executables = [
     Executable(
-        script="VideoBot.py",  # Обновили имя скрипта
+        script="VideoBot.py",
         base=base,
-        target_name="VideoBot.exe",  # Обновили имя исполняемого файла
+        target_name="VideoBot.exe",
         icon="icons/256.ico",
-        uac_admin=True  # Требование прав администратора
+        uac_admin=True
+    ),
+    Executable(  # Добавляем второй исполняемый файл для bot.py
+        script="bot.py",
+        base=base,
+        target_name="Bot.exe",
+        icon="icons/256.ico",
+        uac_admin=True
     )
 ]
 
@@ -39,7 +46,15 @@ packages = [
     "subprocess",
     "webbrowser",
     "os",
-    "logging"
+    "logging",
+    "telethon",  # Добавляем для bot.py
+    "yt_dlp",    # Добавляем для bot.py
+    "asyncio",
+    "json",
+    "requests",
+    "zipfile",
+    "time",
+    "ctypes"
 ]
 includes = []
 excludes = []
@@ -86,7 +101,7 @@ for dll in mingw_dlls:
         print(f"Warning: {dll} not found at {dll_path}")
 
 # Добавляем манифест в include_files
-manifest_file = "VideoBot.exe.manifest"  # Обновили имя манифеста
+manifest_file = "VideoBot.exe.manifest"
 if not os.path.exists(manifest_file):
     print(f"Warning: {manifest_file} not found. It should be created before building.")
 

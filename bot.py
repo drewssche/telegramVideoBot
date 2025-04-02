@@ -34,7 +34,7 @@ import psutil
 # Настройка логирования
 logging.basicConfig(
     filename='bot.log',
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     encoding='utf-8',
     filemode='a'
@@ -1775,7 +1775,7 @@ class AuthWindow(QMainWindow):
         progress.cancel_button.clicked.connect(self.download_thread.terminate)
         progress.cancel_button.clicked.connect(progress.close)
 
-        progress.exec_()
+        progress.exec()
 
     def on_download_finished(self, success, error, progress, zip_path):
         # Функция проверки прав администратора
@@ -1832,12 +1832,12 @@ class AuthWindow(QMainWindow):
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
                 exe_in_zip = None
                 for f in zip_ref.namelist():
-                    if os.path.basename(f) == "VideoBot.exe":  # Обновили имя файла
+                    if os.path.basename(f) == "Bot.exe":  # Проверяем Bot.exe вместо VideoBot.exe
                         exe_in_zip = f
                         break
                 if not exe_in_zip:
-                    logging.error("Архив не содержит VideoBot.exe")
-                    self.show_notification("Архив не содержит VideoBot.exe. Обновление невозможно.", "error")
+                    logging.error("Архив не содержит Bot.exe")
+                    self.show_notification("Архив не содержит Bot.exe. Обновление невозможно.", "error")
                     return
         except zipfile.BadZipFile as e:
             logging.error(f"Не удалось проверить содержимое архива: {str(e)}")
@@ -1875,11 +1875,11 @@ class AuthWindow(QMainWindow):
                     chcp 65001 >nul
                     echo [%date% %time%] Начало выполнения update.bat >> update.log 2>&1
 
-                    :: Принудительное завершение VideoBot.exe
-                    echo [%date% %time%] Завершение процесса VideoBot.exe >> update.log 2>&1
-                    taskkill /F /IM VideoBot.exe >> update.log 2>&1
+                    :: Принудительное завершение Bot.exe
+                    echo [%date% %time%] Завершение процесса Bot.exe >> update.log 2>&1
+                    taskkill /F /IM Bot.exe >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
-                        echo [%date% %time%] Предупреждение: Процесс VideoBot.exe не найден или уже завершён >> update.log 2>&1
+                        echo [%date% %time%] Предупреждение: Процесс Bot.exe не найден или уже завершён >> update.log 2>&1
                     )
 
                     :: Задержка 3 секунды перед началом обновления
@@ -1911,8 +1911,8 @@ class AuthWindow(QMainWindow):
                     timeout /t 2 /nobreak >nul
 
                     :: Запуск новой версии
-                    echo [%date% %time%] Запуск новой версии VideoBot.exe >> update.log 2>&1
-                    start /B "" "VideoBot.exe" >> update.log 2>&1
+                    echo [%date% %time%] Запуск новой версии Bot.exe >> update.log 2>&1
+                    start /B "" "Bot.exe" >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
                         echo [%date% %time%] Ошибка: Не удалось запустить новую версию >> update.log 2>&1
                         exit /b 1
@@ -1925,11 +1925,11 @@ class AuthWindow(QMainWindow):
                     chcp 65001 >nul
                     echo [%date% %time%] Начало выполнения update.bat >> update.log 2>&1
 
-                    :: Принудительное завершение VideoBot.exe
-                    echo [%date% %time%] Завершение процесса VideoBot.exe >> update.log 2>&1
-                    taskkill /F /IM VideoBot.exe >> update.log 2>&1
+                    :: Принудительное завершение Bot.exe
+                    echo [%date% %time%] Завершение процесса Bot.exe >> update.log 2>&1
+                    taskkill /F /IM Bot.exe >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
-                        echo [%date% %time%] Предупреждение: Процесс VideoBot.exe не найден или уже завершён >> update.log 2>&1
+                        echo [%date% %time%] Предупреждение: Процесс Bot.exe не найден или уже завершён >> update.log 2>&1
                     )
 
                     :: Задержка 3 секунды перед началом обновления
@@ -1961,8 +1961,8 @@ class AuthWindow(QMainWindow):
                     timeout /t 2 /nobreak >nul
 
                     :: Запуск новой версии
-                    echo [%date% %time%] Запуск новой версии VideoBot.exe >> update.log 2>&1
-                    start /B "" "VideoBot.exe" >> update.log 2>&1
+                    echo [%date% %time%] Запуск новой версии Bot.exe >> update.log 2>&1
+                    start /B "" "Bot.exe" >> update.log 2>&1
                     if %ERRORLEVEL% neq 0 (
                         echo [%date% %time%] Ошибка: Не удалось запустить новую версию >> update.log 2>&1
                         exit /b 1
@@ -2054,7 +2054,7 @@ class AuthWindow(QMainWindow):
             if hasattr(self, "changelog") and hasattr(self, "new_version"):
                 if self.compare_versions(self.new_version, CURRENT_VERSION) > 0:
                     changelog_dialog = ChangelogDialog(self.changelog, self.new_version, show_download_button=True, parent=self)
-                    return changelog_dialog.exec_() == QDialog.Accepted  # True, если нажата "📥 Загрузить"
+                    return changelog_dialog.exec() == QDialog.Accepted  # True, если нажата "📥 Загрузить"
             return False  # Если чейнджлог не показан, считаем, что обновление отменено
         except Exception as e:
             logging.error(f"Неизвестная ошибка при показе чейнджлога: {str(e)}")

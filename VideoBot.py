@@ -105,7 +105,7 @@ class LoadingWindow(QMainWindow):
         # Если не нашли через shutil.which, проверяем стандартные пути из PATH
         path_dirs = os.environ.get("PATH", "").split(os.pathsep)
         common_python_dirs = [
-            r"C:\Users\scheg\AppData\Local\Programs\Python\Python310",  # Ваш путь
+            r"C:\Users\scheg\AppData\Local\Programs\Python\Python310",
             r"C:\Users\scheg\AppData\Local\Programs\Python\Python310\Scripts",
             r"C:\Python310",
             r"C:\Python39",
@@ -115,7 +115,7 @@ class LoadingWindow(QMainWindow):
             r"C:\Program Files\Python39",
             r"C:\Program Files\Python38",
             r"C:\Program Files\Python37",
-            r"C:\Users\scheg\AppData\Local\Microsoft\WindowsApps",  # Проблемный путь
+            r"C:\Users\scheg\AppData\Local\Microsoft\WindowsApps",
         ]
         path_dirs.extend(common_python_dirs)
 
@@ -161,10 +161,10 @@ class LoadingWindow(QMainWindow):
         # Шаг 1: Проверка Python 3.7+
         self.update_status("Проверка Python 3.7+...", progress=0)
         # Если запущен как скрипт, используем sys.executable, иначе ищем в PATH
-        if getattr(sys, "frozen", False):  # Проверяем, скомпилирован ли скрипт (VideoBot.exe)
-            python_path = self.find_python_in_path()  # Используем расширенный поиск
+        if getattr(sys, "frozen", False):
+            python_path = self.find_python_in_path()
         else:
-            python_path = sys.executable  # Используем текущий интерпретатор
+            python_path = sys.executable
 
         if not python_path:
             logging.warning("Python не найден")
@@ -209,7 +209,6 @@ class LoadingWindow(QMainWindow):
         try:
             if not os.path.exists("requirements.txt"):
                 raise FileNotFoundError("Файл requirements.txt не найден")
-            # Используем python_path для вызова pip
             result = subprocess.run([python_path, "-m", "pip", "install", "-r", "requirements.txt"], capture_output=True, text=True, check=True)
             logging.info("Зависимости успешно установлены")
             logging.debug(f"Вывод pip: {result.stdout}")
@@ -260,24 +259,28 @@ class LoadingWindow(QMainWindow):
         else:
             self.update_status("FFmpeg найден ✅", color="green", progress=100)
 
-        # Шаг 5: Запуск bot.py без консольного окна
+        # Шаг 5: Запуск Bot.exe
         self.update_status("Все проверки пройдены ✅. Запуск Telegram Video Bot...", color="green", progress=100)
         try:
-            # Проверяем, существует ли pythonw.exe в той же директории, что и python_path
-            python_dir = os.path.dirname(python_path)
-            pythonw_path = os.path.join(python_dir, "pythonw.exe")
-            if os.path.isfile(pythonw_path):
-                logging.info(f"Используем pythonw.exe для запуска bot.py: {pythonw_path}")
-                subprocess.Popen([pythonw_path, "bot.py"])
+            if getattr(sys, "frozen", False):
+                # Если запущен как VideoBot.exe, Bot.exe должен быть в той же директории
+                bot_exe_path = os.path.join(os.path.dirname(sys.executable), "Bot.exe")
             else:
-                logging.warning(f"pythonw.exe не найден в {python_dir}, используем python.exe с CREATE_NO_WINDOW")
-                # Используем CREATE_NO_WINDOW для скрытия консоли
-                CREATE_NO_WINDOW = 0x08000000  # Флаг для Windows, чтобы не создавать окно
-                subprocess.Popen([python_path, "bot.py"], creationflags=CREATE_NO_WINDOW)
-            logging.info("bot.py успешно запущен без консольного окна")
+                # Если запущен как скрипт, ищем Bot.exe в текущей директории
+                bot_exe_path = os.path.join(os.getcwd(), "VideoBot", "Bot.exe")
+            
+            if not os.path.isfile(bot_exe_path):
+                logging.error(f"Bot.exe не найден по пути: {bot_exe_path}")
+                self.update_status(f"Bot.exe не найден по пути: {bot_exe_path} ❌", color="red", progress=100)
+                self.retry_button.setVisible(True)
+                return
+
+            logging.info(f"Запускаем Bot.exe: {bot_exe_path}")
+            subprocess.Popen([bot_exe_path])
+            logging.info("Bot.exe успешно запущен")
             QTimer.singleShot(500, self.close)
         except Exception as e:
-            logging.error(f"Ошибка запуска bot.py: {str(e)}")
+            logging.error(f"Ошибка запуска Bot.exe: {str(e)}")
             self.update_status(f"Ошибка запуска Telegram Video Bot ❌", color="red", progress=100)
             self.retry_button.setVisible(True)
 
