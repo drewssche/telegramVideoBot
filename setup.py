@@ -1,68 +1,48 @@
+# setup.py
 import os
-import json
 import sys
-import hashlib
 from cx_Freeze import setup, Executable
 
-# Явно импортируем PySide6
+# Проверка наличия PySide6
 try:
     import PySide6
 except ImportError:
     print("Error: PySide6 is not installed. Please install it using 'pip install PySide6'.")
     sys.exit(1)
 
-# Логируем хэш bot.py перед сборкой
-with open("bot.py", "rb") as f:
-    bot_content = f.read()
-    bot_hash = hashlib.sha256(bot_content).hexdigest()
-    print(f"SHA256 hash of bot.py before build: {bot_hash}")
-
-# Создаём папку temp-files, если она не существует
-if not os.path.exists("temp-files"):
-    os.makedirs("temp-files")
-    print("Created temp-files directory")
-
 # Читаем версию из version.json
 with open("version.json", "r", encoding="utf-8") as f:
+    import json
     version_data = json.load(f)
     version = version_data["version"]
     print(f"Version from version.json: {version}")
-
-# Определяем, является ли это крупным релизом
-def is_major_release(version):
-    parts = list(map(int, version.split(".")))
-    return parts[1] == 0 and parts[2] == 0
 
 # Базовые настройки
 base = "Win32GUI" if sys.platform == "win32" else None
 executables = [
     Executable(
-        script="bot.py",
+        script="loader.py",
         base=base,
-        target_name="VideoBot.exe",
+        target_name="loader.exe",
         icon="icons/256.ico",
         uac_admin=True  # Требование прав администратора
     )
 ]
 
-# Пакеты и модули
+# Минимальный набор пакетов
 packages = [
-    "os", "sys", "asyncio", "sqlite3", "logging", "time", "re", "random", "shutil", "subprocess",
-    "telethon", "PySide6", "qasync", "yt_dlp", "json", "requests", "hashlib", "zipfile",
-    "PySide6.QtCore", "PySide6.QtGui", "PySide6.QtWidgets",
-    "yt_dlp.extractor.youtube",
-    "yt_dlp.extractor.twitter",
-    "yt_dlp.extractor.tiktok",
-    "yt_dlp.utils",
-    "win32api", "win32con",
-    "pynvml", "psutil"  # Добавлены новые зависимости
+    "PySide6.QtCore",
+    "PySide6.QtGui",
+    "PySide6.QtWidgets",
+    "sys",
+    "shutil",
+    "subprocess",
+    "webbrowser",
+    "os",
+    "logging"
 ]
 includes = []
-excludes = [
-    "yt_dlp.extractor.instagram",
-    "yt_dlp.extractor.facebook",
-    "yt_dlp.extractor.vimeo",
-]
+excludes = []
 
 # Находим PySide6 и Qt зависимости
 pyside6_path = os.path.dirname(sys.modules["PySide6"].__file__)
@@ -106,28 +86,12 @@ for dll in mingw_dlls:
         print(f"Warning: {dll} not found at {dll_path}")
 
 # Добавляем манифест в include_files
-manifest_file = "VideoBot.exe.manifest"
+manifest_file = "loader.exe.manifest"
 if not os.path.exists(manifest_file):
     print(f"Warning: {manifest_file} not found. It should be created before building.")
 
-# Полный релиз
-full_build_options = {
-    "packages": packages,
-    "includes": includes,
-    "excludes": excludes,
-    "include_files": [
-        ("version.json", "version.json"),
-        ("help_content.json", "help_content.json"),
-        ("temp-files", "temp-files"),
-        ("icons", "icons"),
-        (manifest_file, manifest_file),
-    ] + qt_plugins_includes + qt_dll_includes + qt_system_dll_includes,
-    "build_exe": "VideoBot",
-    "replace_paths": []
-}
-
-# Инкрементальный релиз
-incremental_build_options = {
+# Настройки сборки
+build_options = {
     "packages": packages,
     "includes": includes,
     "excludes": excludes,
@@ -135,22 +99,19 @@ incremental_build_options = {
         ("version.json", "version.json"),
         ("help_content.json", "help_content.json"),
         ("icons", "icons"),
+        ("bot.py", "bot.py"),
+        ("requirements.txt", "requirements.txt"),
         (manifest_file, manifest_file),
     ] + qt_plugins_includes + qt_dll_includes + qt_system_dll_includes,
     "build_exe": "VideoBot",
     "replace_paths": []
 }
-
-# Определяем тип сборки
-build_type = os.getenv("BUILD_TYPE", "full")
-build_options = full_build_options if build_type == "full" else incremental_build_options
-print(f"Build type: {build_type}")
 
 # Настройка
 setup(
-    name="VideoBot",
+    name="VideoBotLoader",
     version=version,
-    description="Telegram Video Bot",
+    description="VideoBot Loader",
     options={"build_exe": build_options},
     executables=executables
 )

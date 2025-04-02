@@ -4,6 +4,8 @@ build/
 temp/
 __pycache__/
 old/
+.venv/
+loader.log
 bot_backup.py
 bot.log
 bot.session
