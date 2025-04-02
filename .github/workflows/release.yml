@@ -1,4 +1,4 @@
-# .github/workflows/create-release.yml
+# .github/workflows/create-release.yml (обновлённый)
 name: Create Release
 
 on:
@@ -30,7 +30,7 @@ jobs:
           python-version: '3.10'
           check-latest: false
 
-      # Установка зависимостей для сборки loader.exe
+      # Установка зависимостей для сборки VideoBot.exe
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -46,17 +46,17 @@ jobs:
       # Создание манифеста для запуска с правами администратора
       - name: Create manifest file
         run: |
-          echo ^<?xml version="1.0" encoding="UTF-8" standalone="yes"?^> > loader.exe.manifest
-          echo ^<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0"^> >> loader.exe.manifest
-          echo ^    ^<trustInfo xmlns="urn:schemas-microsoft-com:asm.v3"^> >> loader.exe.manifest
-          echo ^        ^<security^> >> loader.exe.manifest
-          echo ^            ^<requestedPrivileges^> >> loader.exe.manifest
-          echo ^                ^<requestedExecutionLevel level="requireAdministrator" uiAccess="false"/^> >> loader.exe.manifest
-          echo ^            ^</requestedPrivileges^> >> loader.exe.manifest
-          echo ^        ^</security^> >> loader.exe.manifest
-          echo ^    ^</trustInfo^> >> loader.exe.manifest
-          echo ^</assembly^> >> loader.exe.manifest
-          type loader.exe.manifest
+          echo ^<?xml version="1.0" encoding="UTF-8" standalone="yes"?^> > VideoBot.exe.manifest
+          echo ^<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0"^> >> VideoBot.exe.manifest
+          echo ^    ^<trustInfo xmlns="urn:schemas-microsoft-com:asm.v3"^> >> VideoBot.exe.manifest
+          echo ^        ^<security^> >> VideoBot.exe.manifest
+          echo ^            ^<requestedPrivileges^> >> VideoBot.exe.manifest
+          echo ^                ^<requestedExecutionLevel level="requireAdministrator" uiAccess="false"/^> >> VideoBot.exe.manifest
+          echo ^            ^</requestedPrivileges^> >> VideoBot.exe.manifest
+          echo ^        ^</security^> >> VideoBot.exe.manifest
+          echo ^    ^</trustInfo^> >> VideoBot.exe.manifest
+          echo ^</assembly^> >> VideoBot.exe.manifest
+          type VideoBot.exe.manifest
         shell: cmd
 
       # Проверка кодировки JSON файлов
@@ -74,11 +74,11 @@ jobs:
           python ensure_utf8.py
         shell: cmd
 
-      # Логирование хэша loader.py перед сборкой
-      - name: Log SHA256 hash of loader.py
+      # Логирование хэша VideoBot.py перед сборкой
+      - name: Log SHA256 hash of VideoBot.py
         run: |
-          certutil -hashfile loader.py SHA256 > loader_py_hash.txt
-          type loader_py_hash.txt
+          certutil -hashfile VideoBot.py SHA256 > videobot_py_hash.txt
+          type videobot_py_hash.txt
         shell: cmd
 
       # Извлечение версии и changelog
@@ -97,22 +97,22 @@ jobs:
           mkdir "dist"
         shell: cmd
 
-      # Сборка loader.exe
-      - name: Build Loader
+      # Сборка VideoBot.exe
+      - name: Build VideoBot
         run: |
           REM Очистка перед сборкой
-          python setup.py clean > clean_loader.log 2>&1 || (type clean_loader.log && exit 1)
+          python setup.py clean > clean_videobot.log 2>&1 || (type clean_videobot.log && exit 1)
           REM Сборка
-          python setup.py build_exe > build_loader.log 2>&1 || (type build_loader.log && exit 1)
-          if not exist "VideoBot\loader.exe" (
-            echo "Error: loader.exe was not created during the build"
-            type build_loader.log
+          python setup.py build_exe > build_videobot.log 2>&1 || (type build_videobot.log && exit 1)
+          if not exist "VideoBot\VideoBot.exe" (
+            echo "Error: VideoBot.exe was not created during the build"
+            type build_videobot.log
             exit 1
           )
-          certutil -hashfile VideoBot\loader.exe SHA256 > loader_exe_hash.txt
-          type loader_exe_hash.txt
+          certutil -hashfile VideoBot\VideoBot.exe SHA256 > videobot_exe_hash.txt
+          type videobot_exe_hash.txt
           REM Логируем размер файла и содержимое папки
-          dir VideoBot\loader.exe
+          dir VideoBot\VideoBot.exe
           dir VideoBot
           REM Переходим в папку VideoBot и архивируем её содержимое без самой папки
           cd VideoBot

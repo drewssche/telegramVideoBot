@@ -1,4 +1,4 @@
-# setup.py
+# setup.py (обновлённый)
 import os
 import sys
 from cx_Freeze import setup, Executable
@@ -21,9 +21,9 @@ with open("version.json", "r", encoding="utf-8") as f:
 base = "Win32GUI" if sys.platform == "win32" else None
 executables = [
     Executable(
-        script="loader.py",
+        script="VideoBot.py",  # Обновили имя скрипта
         base=base,
-        target_name="loader.exe",
+        target_name="VideoBot.exe",  # Обновили имя исполняемого файла
         icon="icons/256.ico",
         uac_admin=True  # Требование прав администратора
     )
@@ -86,7 +86,7 @@ for dll in mingw_dlls:
         print(f"Warning: {dll} not found at {dll_path}")
 
 # Добавляем манифест в include_files
-manifest_file = "loader.exe.manifest"
+manifest_file = "VideoBot.exe.manifest"  # Обновили имя манифеста
 if not os.path.exists(manifest_file):
     print(f"Warning: {manifest_file} not found. It should be created before building.")
 

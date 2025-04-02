@@ -1832,7 +1832,7 @@ class AuthWindow(QMainWindow):
             with zipfile.ZipFile(zip_path, "r") as zip_ref:
                 exe_in_zip = None
                 for f in zip_ref.namelist():
-                    if os.path.basename(f) == "VideoBot.exe":
+                    if os.path.basename(f) == "VideoBot.exe":  # Обновили имя файла
                         exe_in_zip = f
                         break
                 if not exe_in_zip:

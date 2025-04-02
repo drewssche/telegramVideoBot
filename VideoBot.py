@@ -1,4 +1,4 @@
-# loader.py (обновлённый)
+# VideoBot.py (обновлённый)
 import sys
 import shutil
 import subprocess
@@ -20,7 +20,7 @@ logging.basicConfig(
 class LoadingWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("VideoBot - Загрузка")
+        self.setWindowTitle("Telegram Video Bot - Загрузка")
         self.setFixedSize(400, 300)
         screen = QApplication.primaryScreen().geometry()
         self.move((screen.width() - self.width()) // 2, (screen.height() - self.height()) // 2)
@@ -75,6 +75,47 @@ class LoadingWindow(QMainWindow):
             self.progress_bar.setValue(progress)
         QApplication.processEvents()
 
+    def find_python_in_path(self):
+        """Ищет Python в переменной PATH и стандартных директориях."""
+        # Сначала проверяем через shutil.which
+        python_path = shutil.which("python3") or shutil.which("python")
+        if python_path:
+            return python_path
+
+        # Если не нашли через shutil.which, проверяем стандартные пути из PATH
+        path_dirs = os.environ.get("PATH", "").split(os.pathsep)
+        common_python_dirs = [
+            r"C:\Users\scheg\AppData\Local\Programs\Python\Python310",  # Ваш путь
+            r"C:\Users\scheg\AppData\Local\Programs\Python\Python310\Scripts",
+            r"C:\Python310",
+            r"C:\Python39",
+            r"C:\Python38",
+            r"C:\Python37",
+            r"C:\Program Files\Python310",
+            r"C:\Program Files\Python39",
+            r"C:\Program Files\Python38",
+            r"C:\Program Files\Python37",
+            r"C:\Users\scheg\AppData\Local\Microsoft\WindowsApps",  # Путь, где был найден проблемный python3.exe
+        ]
+        path_dirs.extend(common_python_dirs)
+
+        for directory in path_dirs:
+            if not directory:
+                continue
+            for python_name in ["python.exe", "python3.exe"]:
+                possible_path = os.path.join(directory, python_name)
+                if os.path.isfile(possible_path):
+                    try:
+                        # Проверяем, что это рабочий интерпретатор
+                        result = subprocess.run([possible_path, "--version"], capture_output=True, text=True, check=True)
+                        if result.stdout.startswith("Python"):
+                            logging.info(f"Python найден в {possible_path}")
+                            return possible_path
+                    except Exception as e:
+                        logging.debug(f"Путь {possible_path} не является рабочим интерпретатором: {str(e)}")
+                        continue
+        return None
+
     def check_python_version(self, python_path):
         """Проверяет, является ли версия Python 3.7 или выше."""
         try:
@@ -105,8 +146,8 @@ class LoadingWindow(QMainWindow):
         # Шаг 1: Проверка Python 3.7+
         self.update_status("Проверка Python 3.7+...", progress=0)
         # Если запущен как скрипт, используем sys.executable, иначе ищем в PATH
-        if getattr(sys, "frozen", False):  # Проверяем, скомпилирован ли скрипт (loader.exe)
-            python_path = shutil.which("python3") or shutil.which("python")
+        if getattr(sys, "frozen", False):  # Проверяем, скомпилирован ли скрипт (VideoBot.exe)
+            python_path = self.find_python_in_path()  # Используем расширенный поиск
         else:
             python_path = sys.executable  # Используем текущий интерпретатор
 
@@ -205,14 +246,14 @@ class LoadingWindow(QMainWindow):
             self.update_status("FFmpeg найден ✅", color="green", progress=100)
 
         # Шаг 5: Запуск bot.py
-        self.update_status("Все проверки пройдены ✅. Запуск VideoBot...", color="green", progress=100)
+        self.update_status("Все проверки пройдены ✅. Запуск Telegram Video Bot...", color="green", progress=100)
         try:
             subprocess.Popen([python_path, "bot.py"])
             logging.info("bot.py успешно запущен")
             QTimer.singleShot(500, self.close)
         except Exception as e:
             logging.error(f"Ошибка запуска bot.py: {str(e)}")
-            self.update_status(f"Ошибка запуска VideoBot ❌", color="red", progress=100)
+            self.update_status(f"Ошибка запуска Telegram Video Bot ❌", color="red", progress=100)
             self.retry_button.setVisible(True)
 
     def install_python(self):
