@@ -75,12 +75,32 @@ class LoadingWindow(QMainWindow):
             self.progress_bar.setValue(progress)
         QApplication.processEvents()
 
+    def is_valid_python(self, python_path):
+        """Проверяет, является ли путь рабочим интерпретатором Python."""
+        try:
+            result = subprocess.run([python_path, "--version"], capture_output=True, text=True, check=True)
+            if result.stdout.startswith("Python"):
+                version_parts = result.stdout.strip().split(" ")[1].split(".")
+                major, minor = int(version_parts[0]), int(version_parts[1])
+                if major == 3 and minor >= 7:
+                    logging.info(f"Рабочий интерпретатор Python {major}.{minor} найден: {python_path}")
+                    return True
+            return False
+        except Exception as e:
+            logging.debug(f"Путь {python_path} не является рабочим интерпретатором: {str(e)}")
+            return False
+
     def find_python_in_path(self):
         """Ищет Python в переменной PATH и стандартных директориях."""
         # Сначала проверяем через shutil.which
-        python_path = shutil.which("python3") or shutil.which("python")
-        if python_path:
-            return python_path
+        for python_name in ["python3", "python"]:
+            python_path = shutil.which(python_name)
+            if python_path:
+                logging.info(f"Путь найден через shutil.which({python_name}): {python_path}")
+                if self.is_valid_python(python_path):
+                    return python_path
+                else:
+                    logging.warning(f"Путь {python_path} (из shutil.which) не является рабочим интерпретатором")
 
         # Если не нашли через shutil.which, проверяем стандартные пути из PATH
         path_dirs = os.environ.get("PATH", "").split(os.pathsep)
@@ -95,7 +115,7 @@ class LoadingWindow(QMainWindow):
             r"C:\Program Files\Python39",
             r"C:\Program Files\Python38",
             r"C:\Program Files\Python37",
-            r"C:\Users\scheg\AppData\Local\Microsoft\WindowsApps",  # Путь, где был найден проблемный python3.exe
+            r"C:\Users\scheg\AppData\Local\Microsoft\WindowsApps",  # Проблемный путь
         ]
         path_dirs.extend(common_python_dirs)
 
@@ -105,15 +125,10 @@ class LoadingWindow(QMainWindow):
             for python_name in ["python.exe", "python3.exe"]:
                 possible_path = os.path.join(directory, python_name)
                 if os.path.isfile(possible_path):
-                    try:
-                        # Проверяем, что это рабочий интерпретатор
-                        result = subprocess.run([possible_path, "--version"], capture_output=True, text=True, check=True)
-                        if result.stdout.startswith("Python"):
-                            logging.info(f"Python найден в {possible_path}")
-                            return possible_path
-                    except Exception as e:
-                        logging.debug(f"Путь {possible_path} не является рабочим интерпретатором: {str(e)}")
-                        continue
+                    logging.info(f"Проверяем путь: {possible_path}")
+                    if self.is_valid_python(possible_path):
+                        return possible_path
+        logging.warning("Рабочий интерпретатор Python не найден")
         return None
 
     def check_python_version(self, python_path):
