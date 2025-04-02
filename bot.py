@@ -34,7 +34,7 @@ import psutil
 # Настройка логирования
 logging.basicConfig(
     filename='bot.log',
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s',
     encoding='utf-8',
     filemode='a'
@@ -61,10 +61,9 @@ CURRENT_VERSION = get_current_version()
 VIDEO_URL_PATTERNS = {
     'youtube': re.compile(r'(?:https?://)?(?:www\.)?(?:youtube\.com/(?:watch\?v=|shorts/)|youtu\.be/)([\w-]{11})'),
     'instagram': re.compile(r'(?:https?://)?(?:www\.)?instagram\.com/reel[s]?/([\w-]+)'),
-    'tiktok': re.compile(r'(?:https?://)?(?:[\w-]+\.)?tiktok\.com/(?:@[\w\.-]+/video/|v/)?([\w-]+)'),
+    'tiktok': re.compile(r'(?:https?://)?(?:[\w-]+\.)?tiktok\.com/(?:@([\w\.-]+)/video/|v/)?([\w-]+)'),
     'twitter': re.compile(r'(?:https?://)?(?:www\.)?(?:twitter\.com|x\.com)/[\w-]+/status/(\d+)')
 }
-VIDEO_SEND_DELAY = 1
 TEMP_DIR = "temp-files"
 os.makedirs(TEMP_DIR, exist_ok=True)
 
@@ -453,7 +452,7 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
     # Проверяем сигнатуру в текущем сообщении
     current_message = await state.client.get_messages(chat_id, ids=message_id)
     if current_message and re.search(r'\[BotSignature:[0-9a-f-]+\]', current_message.text or ""):
-        logging.info(f"Ссылка {url} уже обработана, пропускаем", extra={'chat_title': chat_title, 'sender_info': sender_info})
+        logging.info(f"⚠️ Ссылка уже обработана: {url} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
         return False
 
     if can_edit:
@@ -464,14 +463,13 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
             f"Обрабатываю ссылку {url}\n{platform}\n[{' ' * 10}] 0%\n[BotSignature:{state.bot_signature_id}]"
         )
     else:
-        # Для своих пересланных — без задержки
         progress_msg = await state.client.send_message(
             chat_id,
             f"Обрабатываю ссылку {url}\n{platform}\n[{' ' * 10}] 0%\n[BotSignature:{state.bot_signature_id}]",
             reply_to=message_id
         )
         if progress_msg is None or not hasattr(progress_msg, 'id'):
-            logging.error(f"Не удалось отправить сообщение для {url}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+            logging.error(f"🔴 Ошибка: Не удалось отправить сообщение ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
             return False
 
     last_percentage = [0]
@@ -486,7 +484,7 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
         chat_entity = await state.client.get_entity(chat_id)
         chat_title = chat_entity.title if hasattr(chat_entity, 'title') else f"{chat_entity.first_name or ''} {chat_entity.last_name or ''}".strip()
     except Exception as e:
-        logging.error(f"Не удалось определить чат", extra={'chat_title': 'Неизвестный чат', 'sender_info': sender_info})
+        logging.error(f"Не удалось определить чат: {str(e)}", extra={'chat_title': 'Неизвестный чат', 'sender_info': sender_info})
         chat_title = "Неизвестный чат"
 
     unique_suffix = f"{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
@@ -536,7 +534,7 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
         if not shutil.which('ffmpeg'):
             raise FileNotFoundError("ffmpeg не найден")
 
-        logging.info(f"Запускаем обработку в {chat_title} от {sender_info}: {platform.lower()} {url}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+        logging.info(f"🎬 Начинаем обработку: {url} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
 
         with yt_dlp.YoutubeDL({'quiet': True, 'no_warnings': True, 'extractor_list': ['youtube', 'twitter']}) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -549,7 +547,7 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
                         progress_msg.id,
                         f"Видео {url} недоступно\n{platform}\n[BotSignature:{state.bot_signature_id}]"
                     )
-                logging.error(f"Не удалось обработать ссылку {url}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                logging.error(f"🔴 Ошибка: Недоступно ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
                 return False
             duration = info.get('duration', 0)
             if max_duration and duration > max_duration:
@@ -566,7 +564,7 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
                         await state.client.edit_message(chat_id, progress_msg.id, random_response)
                     else:
                         await state.client.delete_messages(chat_id, progress_msg.id)
-                logging.warning(f"Видео отклонено: длительность {duration} сек > {max_duration} сек", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                logging.warning(f"⚠️ Видео отклонено: длительность {duration} сек > {max_duration} сек ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
                 return False
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -595,9 +593,9 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
                     creationflags=subprocess.CREATE_NO_WINDOW
                 )
             except subprocess.CalledProcessError as e:
-                logging.error(f"Не удалось обработать видео {url}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                logging.error(f"Не удалось обработать видео {url}: {str(e)}", extra={'chat_title': chat_title, 'sender_info': sender_info})
                 if state.gpu_enabled:
-                    logging.warning(f"GPU-режим не сработал, используется CPU", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                    logging.warning(f"⚠️ GPU-режим не сработал, используется CPU ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
                     ffmpeg_cmd[ffmpeg_cmd.index('-c:v') + 1] = 'libx264'
                     ffmpeg_cmd[ffmpeg_cmd.index('-preset') + 1] = 'veryfast'
                     result = subprocess.run(
@@ -615,7 +613,6 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
             height = min(info.get('height', 1280), 1280)
             duration = info.get('duration', 0)
 
-            # Проверка новых сообщений перед финальным редактированием
             start_time = time.time()
             messages_checked = 0
             while time.time() - start_time < 5 and messages_checked < 2:
@@ -627,7 +624,7 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
                     if re.search(r'\[BotSignature:[0-9a-f-]+\]', msg.text) and msg.reply_to_msg_id == message_id:
                         signature = re.search(r'\[BotSignature:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]', msg.text).group(1)
                         if signature != state.bot_signature_id:
-                            logging.info(f"Ссылка {url} обработана другим ботом во время ожидания, прерываем", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                            logging.info(f"⚠️ Ссылка обработана другим ботом: {url} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
                             if not can_edit:
                                 await state.client.delete_messages(chat_id, progress_msg.id)
                             return False
@@ -652,11 +649,6 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
                     attributes=attributes,
                     force_document=False
                 )
-                emoji = "📺" if "YouTube" in platform else "🐦"
-                logging.info(
-                    f"✅ {emoji} Успешно отправлено в {chat_title} от {sender_info}: {display_url}",
-                    extra={'chat_title': chat_title, 'sender_info': sender_info}
-                )
             return True
 
     except Exception as e:
@@ -671,7 +663,7 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
                 )
         except Exception as delete_error:
             pass
-        logging.error(f"Не удалось обработать ссылку {url}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+        logging.error(f"🔴 Ошибка: Не удалось обработать {url} ({chat_title}, {sender_info}) - {str(e)}", extra={'chat_title': chat_title, 'sender_info': sender_info})
         return False
     finally:
         if url in state.processing_links:
@@ -686,13 +678,13 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
                         if "[WinError 32]" in str(e):
                             await asyncio.sleep(1)
                         else:
-                            logging.error(f"Не удалось удалить временный файл", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                            logging.error(f"Не удалось удалить временный файл: {f}", extra={'chat_title': chat_title, 'sender_info': sender_info})
                             break
                     except Exception as e:
-                        logging.error(f"Не удалось удалить временный файл", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                        logging.error(f"Не удалось удалить временный файл: {f}", extra={'chat_title': chat_title, 'sender_info': sender_info})
                         break
                 else:
-                    logging.error(f"Не удалось удалить временный файл после 3 попыток", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                    logging.error(f"Не удалось удалить временный файл после 3 попыток: {f}", extra={'chat_title': chat_title, 'sender_info': sender_info})
 
 async def process_video_link(chat_id, message_id, text, message):
     platform_settings = get_platform_settings()
@@ -714,14 +706,12 @@ async def process_video_link(chat_id, message_id, text, message):
     is_own_message = message.sender_id == state.current_user_id
     is_forwarded = message.fwd_from is not None
 
-    # Проверяем сигнатуру в текущем сообщении
     current_message = await state.client.get_messages(chat_id, ids=message_id)
     if current_message and re.search(r'\[BotSignature:[0-9a-f-]+\]', current_message.text or ""):
-        logging.info(f"Ссылка {text} уже обработана в оригинальном сообщении, пропускаем", extra={'chat_title': chat_title, 'sender_info': sender_info})
+        logging.info(f"⚠️ Ссылка уже обработана: {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
         return False
 
-    # Дополнительная проверка перед началом обработки
-    recent_messages = await state.client.get_messages(chat_id, limit=20)
+    recent_messages = await state.client.get_messages(chat_id, limit=3)
     for msg in recent_messages:
         if not msg.text:
             continue
@@ -738,7 +728,7 @@ async def process_video_link(chat_id, message_id, text, message):
             signature = re.search(r'\[BotSignature:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]', msg_text).group(1)
             if signature != state.bot_signature_id:
                 logging.info(
-                    f"⚠️ Ссылка {text} уже обработана другим ботом с сигнатурой {signature}, отменяем задачу",
+                    f"⚠️ Ссылка обработана другим ботом: {text} ({chat_title}, {sender_info})",
                     extra={'chat_title': chat_title, 'sender_info': sender_info}
                 )
                 return False
@@ -749,13 +739,13 @@ async def process_video_link(chat_id, message_id, text, message):
         match = pattern.search(text)
         if not match or not platform_settings.get(pattern_name, False):
             continue
-        video_id = match.group(1)
+        video_id = match.group(1) if pattern_name != 'tiktok' else match.group(2)
+        username = match.group(1) if pattern_name == 'tiktok' and match.group(1) else None
 
-        # Функция для проверки новых сообщений перед финальным действием
         async def check_new_messages(original_msg_id, temp_msg=None):
             start_time = time.time()
             messages_checked = 0
-            while time.time() - start_time < 5 and messages_checked < 2:  # Таймаут 5 сек, макс 2 сообщения
+            while time.time() - start_time < 5 and messages_checked < 2:
                 new_messages = await state.client.get_messages(chat_id, min_id=original_msg_id, limit=10)
                 for msg in new_messages:
                     if not msg.text or msg.id <= original_msg_id:
@@ -764,11 +754,11 @@ async def process_video_link(chat_id, message_id, text, message):
                     if re.search(r'\[BotSignature:[0-9a-f-]+\]', msg.text) and msg.reply_to_msg_id == original_msg_id:
                         signature = re.search(r'\[BotSignature:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]', msg.text).group(1)
                         if signature != state.bot_signature_id:
-                            logging.info(f"Ссылка {text} обработана другим ботом во время ожидания, прерываем", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                            logging.info(f"⚠️ Ссылка обработана другим ботом: {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
                             if temp_msg and hasattr(temp_msg, 'id') and not is_own_message:
                                 await state.client.delete_messages(chat_id, temp_msg.id)
                             return True
-                await asyncio.sleep(0.5)  # Проверка каждые 0.5 сек
+                await asyncio.sleep(0.5)
             return False
 
         if pattern_name == 'instagram':
@@ -790,21 +780,16 @@ async def process_video_link(chat_id, message_id, text, message):
                     )
                 if await check_new_messages(message_id, temp_msg):
                     return False
-                logging.info(
-                    f"✅ 📸 Успешно отправлено в {chat_title} от {sender_info}: {dd_url}",
-                    extra={'chat_title': chat_title, 'sender_info': sender_info}
-                )
                 return True
             except Exception as e:
                 if temp_msg and hasattr(temp_msg, 'id') and not is_own_message:
                     await state.client.delete_messages(chat_id, temp_msg.id)
-                logging.error(f"Ошибка: {dd_url} - {str(e)}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                logging.error(f"🔴 Ошибка: Не удалось обработать {dd_url} ({chat_title}, {sender_info}) - {str(e)}", extra={'chat_title': chat_title, 'sender_info': sender_info})
                 return False
 
         elif pattern_name == 'tiktok':
             url = match.group(0)
-            video_id = match.group(1)
-            dd_url = f"https://vm.vxtiktok.com/{video_id}"
+            dd_url = url.replace('.tiktok.com', '.vxtiktok.com')
             temp_msg = None
             try:
                 if is_own_message and not is_forwarded:
@@ -821,10 +806,10 @@ async def process_video_link(chat_id, message_id, text, message):
                         reply_to=message_id
                     )
                 if temp_msg is None or not hasattr(temp_msg, 'id'):
-                    logging.error(f"Не удалось отправить сообщение для TikTok {url}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                    logging.error(f"🔴 Ошибка: Не удалось отправить сообщение ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
                     return False
 
-                logging.info(f"TikTok: {url}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                logging.info(f"🎬 Начинаем обработку: {url} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
                 ydl_opts = {'quiet': True, 'no_warnings': True, 'extractor_list': ['tiktok']}
                 with contextlib.redirect_stderr(open(os.devnull, 'w')):
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -840,21 +825,15 @@ async def process_video_link(chat_id, message_id, text, message):
                 if await check_new_messages(message_id, temp_msg):
                     return False
                 await state.client.edit_message(chat_id, temp_msg.id, final_text)
-                logging.info(
-                    f"✅ 🎵 Успешно отправлено в {chat_title} от {sender_info}: {dd_url if has_video else url}",
-                    extra={'chat_title': chat_title, 'sender_info': sender_info}
-                )
                 return True
             except Exception as e:
                 if temp_msg and hasattr(temp_msg, 'id'):
                     if not is_own_message:
-                        # Для чужих или пересланных — удаляем при ошибке
                         try:
                             await state.client.delete_messages(chat_id, temp_msg.id)
                         except:
                             pass
                     else:
-                        # Для своих — оставляем с исходной ссылкой и инфой об ошибке
                         try:
                             await state.client.edit_message(
                                 chat_id,
@@ -863,7 +842,7 @@ async def process_video_link(chat_id, message_id, text, message):
                             )
                         except:
                             pass
-                logging.error(f"Ошибка: {url} - {str(e)}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                logging.error(f"🔴 Ошибка: Не удалось обработать {url} ({chat_title}, {sender_info}) - {str(e)}", extra={'chat_title': chat_title, 'sender_info': sender_info})
                 return False
 
         elif pattern_name == 'youtube':
@@ -3998,17 +3977,18 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
         except Exception:
             sender_info = "для неизвестного пользователя"
 
-        # Игнорируем сообщения "Ошибка обработки..." от своего бота
         if text.startswith("Ошибка обработки") and message.sender_id == state.current_user_id:
             logging.debug(f"Игнорируем своё сообщение об ошибке: {text}", extra={'chat_title': chat_title, 'sender_info': sender_info})
             return
 
-        # Пропускаем уже обработанные TikTok ссылки (vm.vxtiktok.com)
         if "vm.vxtiktok.com" in text:
-            logging.info(f"Обработанная ссылка пропущена: {text}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+            logging.info(f"⚠️ Обработанная ссылка пропущена: {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
             return
 
-        # Проверяем сигнатуру в текущем сообщении
+        if "ddinstagram.com" in text:
+            logging.info(f"⚠️ Ссылка уже обработана: {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
+            return
+
         signature_match = re.search(r'\[BotSignature:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]', text)
         if signature_match:
             signature_id = signature_match.group(1)
@@ -4041,7 +4021,6 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
         is_own_message = message.sender_id == state.current_user_id
         is_forwarded = message.fwd_from is not None
 
-        # Если сообщение от текущего юзера (включая пересланные), обрабатываем моментально
         if is_own_message:
             state.processing_links.add(text)
             if platform_name == 'instagram':
@@ -4051,7 +4030,7 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                     item = QListWidgetItem(f"✅ Instagram 📸: {text} (Завершено)")
                     self.task_list_widget.addItem(item)
                 except Exception as e:
-                    logging.error(f"Ошибка: {text} - {str(e)}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                    logging.error(f"🔴 Ошибка: Не удалось обработать {text} ({chat_title}, {sender_info}) - {str(e)}", extra={'chat_title': chat_title, 'sender_info': sender_info})
                     state.errors_per_chat[chat_id] = state.errors_per_chat.get(chat_id, 0) + 1
                     item = QListWidgetItem(f"🔴 Instagram 📸: {text} (Ошибка)")
                     self.task_list_widget.addItem(item)
@@ -4060,16 +4039,14 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                         state.processing_links.remove(text)
                     self.update_chats_stats()
             else:
-                logging.info(f"⏳ В очередь: {text}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                logging.info(f"⏳ В очередь: {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
                 await state.task_queue.put((chat_id, message.id, text, message))
                 self.update_task_indicators()
             return
 
-        # Для чужих сообщений добавляем задержку 1 сек + 0-5 сек
-        await asyncio.sleep(1 + random.randint(0, 5))  # Итого 1-6 сек
+        await asyncio.sleep(1 + random.randint(0, 5))
 
-        # Проверяем последние сообщения после задержки
-        recent_messages = await state.client.get_messages(chat_id, limit=20)
+        recent_messages = await state.client.get_messages(chat_id, limit=3)
         link_processed = False
         for msg in recent_messages:
             if not msg.text:
@@ -4088,7 +4065,7 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                 signature = re.search(r'\[BotSignature:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]', msg_text).group(1)
                 if signature != state.bot_signature_id:
                     logging.info(
-                        f"⚠️ Ссылка {text} уже обработана другим ботом с сигнатурой {signature}, пропускаем",
+                        f"⚠️ Ссылка обработана другим ботом: {text} ({chat_title}, {sender_info})",
                         extra={'chat_title': chat_title, 'sender_info': sender_info}
                     )
                     platform = {"youtube": "YouTube 📺", "tiktok": "TikTok 🎵", "twitter": "Twitter 🐦", "instagram": "Instagram 📸"}.get(platform_name)
@@ -4100,7 +4077,6 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
         if link_processed:
             return
 
-        # Если ссылка не обработана, добавляем в обработку
         state.processing_links.add(text)
         if platform_name == 'instagram':
             try:
@@ -4109,7 +4085,7 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                 item = QListWidgetItem(f"✅ Instagram 📸: {text} (Завершено)")
                 self.task_list_widget.addItem(item)
             except Exception as e:
-                logging.error(f"Ошибка: {text} - {str(e)}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                logging.error(f"🔴 Ошибка: Не удалось обработать {text} ({chat_title}, {sender_info}) - {str(e)}", extra={'chat_title': chat_title, 'sender_info': sender_info})
                 state.errors_per_chat[chat_id] = state.errors_per_chat.get(chat_id, 0) + 1
                 item = QListWidgetItem(f"🔴 Instagram 📸: {text} (Ошибка)")
                 self.task_list_widget.addItem(item)
@@ -4118,7 +4094,7 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                     state.processing_links.remove(text)
                 self.update_chats_stats()
         else:
-            logging.info(f"⏳ В очередь: {text}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+            logging.info(f"⏳ В очередь: {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
             await state.task_queue.put((chat_id, message.id, text, message))
             self.update_task_indicators()
 
@@ -4142,17 +4118,17 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                 except Exception:
                     sender_info = "для неизвестного пользователя"
 
-                logging.info(f"🎬 Начинаем обработку: {text}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                #logging.info(f"🎬 Начинаем обработку: {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
                 task = asyncio.create_task(process_video_link(chat_id, message_id, text, message))
                 state.active_tasks.append(task)
                 try:
                     success = await run_with_timeout(task, 300)
                     if success:
                         state.links_processed_per_chat[chat_id] = state.links_processed_per_chat.get(chat_id, 0) + 1
-                        logging.info(f"✅ Задача завершена: {text}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                        logging.info(f"✅ Задача завершена: {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
                     else:
                         state.errors_per_chat[chat_id] = state.errors_per_chat.get(chat_id, 0) + 1
-                        logging.error(f"Ошибка в задаче: {text}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                        logging.error(f"🔴 Ошибка: Задача не удалась {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
                 except asyncio.CancelledError:
                     logging.debug(f"Задача отменена: {text}", extra={'chat_title': chat_title, 'sender_info': sender_info})
                 except telethon.errors.FloodWaitError as e:
@@ -4160,7 +4136,7 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                     logging.info(f"Спим {wait_time} секунд из-за FloodWaitError", extra={'chat_title': chat_title, 'sender_info': sender_info})
                     await asyncio.sleep(wait_time)
                 except Exception as e:
-                    logging.error(f"Общая ошибка в задаче {text}: {str(e)}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                    logging.error(f"🔴 Ошибка: Общая ошибка {text} ({chat_title}, {sender_info}) - {str(e)}", extra={'chat_title': chat_title, 'sender_info': sender_info})
                 finally:
                     if task in state.active_tasks:
                         state.active_tasks.remove(task)
@@ -4168,9 +4144,9 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                         state.processing_links.remove(text)
                     self.update_chats_stats()
                     self.update_task_indicators()
-                    await asyncio.sleep(3)  # Задержка после задачи
+                    await asyncio.sleep(3)
                 if state.task_queue.qsize() > 50:
-                    logging.warning(f"Очередь > 50: {state.task_queue.qsize()}", extra={'chat_title': 'unknown', 'sender_info': 'system'})
+                    logging.warning(f"⚠️ Очередь > 50: {state.task_queue.qsize()} (unknown, system)", extra={'chat_title': 'unknown', 'sender_info': 'system'})
             await asyncio.sleep(0.1)
 
     def update_task_indicators(self):
@@ -4370,47 +4346,31 @@ class QListWidgetHandler(logging.Handler):
     def __init__(self, list_widget):
         super().__init__()
         self.list_widget = list_widget
-        # Словарь для преобразования уровня логирования в эмодзи
-        self.level_to_emoji = {
-            'INFO': '🟢',    # Успех
-            'ERROR': '🔴',   # Ошибка
-            'WARNING': '⚠️'  # Предупреждение
-        }
 
     def emit(self, record):
-        # Получаем базовое сообщение
         msg = record.msg
-        # Фильтруем избыточные сообщения для интерфейса
         if "Uploading file of" in msg or "Got difference for" in msg:
-            return  # Пропускаем эти сообщения в интерфейсе
+            return
 
-        # Определяем эмодзи в зависимости от уровня логирования
-        emoji = self.level_to_emoji.get(record.levelname, 'ℹ️')  # ℹ️ как запасной вариант
-
-        # Специфические эмодзи для определенных событий
-        if "Обнаружен GPU" in msg:
-            emoji = '⚙️'
-        elif "Запускаем обработку" in msg:
-            emoji = '🎥'
-        elif "Добавляем задачу в очередь" in msg:
-            emoji = '⏳'
-        elif "GPU-режим не сработал" in msg:
-            emoji = '⚠️'
-
-        # Добавляем информацию о чате и пользователе, если доступно
+        # Добавляем информацию о чате и пользователе, только если её нет в сообщении
         chat_info = ""
         if hasattr(record, 'chat_title') and hasattr(record, 'sender_info'):
             chat_info = f" ({record.chat_title}, {record.sender_info})"
+            # Проверяем, есть ли уже chat_info в сообщении
+            if chat_info.strip() in msg:
+                chat_info = ""  # Не добавляем, если уже есть
 
-        # Форматируем сообщение для интерфейса
-        formatted_msg = f"{record.asctime} {emoji} {msg}{chat_info}"
+        # Убираем длинные технические детали из ошибок для виджета
+        if record.levelname == 'ERROR' and " - " in msg:
+            short_msg = msg.split(" - ")[0]  # Берём только часть до " - "
+        else:
+            short_msg = msg
 
-        # Создаем элемент списка
+        formatted_msg = f"{record.asctime} {short_msg}{chat_info}"
         item = QListWidgetItem(formatted_msg)
-        item.setToolTip(formatted_msg)  # Полный текст в подсказке
+        item.setToolTip(formatted_msg)
         self.list_widget.addItem(item)
 
-        # Ограничиваем количество строк до 1000
         if self.list_widget.count() > 1000:
             self.list_widget.takeItem(0)
         self.list_widget.scrollToBottom()
