@@ -260,11 +260,21 @@ class LoadingWindow(QMainWindow):
         else:
             self.update_status("FFmpeg найден ✅", color="green", progress=100)
 
-        # Шаг 5: Запуск bot.py
+        # Шаг 5: Запуск bot.py без консольного окна
         self.update_status("Все проверки пройдены ✅. Запуск Telegram Video Bot...", color="green", progress=100)
         try:
-            subprocess.Popen([python_path, "bot.py"])
-            logging.info("bot.py успешно запущен")
+            # Проверяем, существует ли pythonw.exe в той же директории, что и python_path
+            python_dir = os.path.dirname(python_path)
+            pythonw_path = os.path.join(python_dir, "pythonw.exe")
+            if os.path.isfile(pythonw_path):
+                logging.info(f"Используем pythonw.exe для запуска bot.py: {pythonw_path}")
+                subprocess.Popen([pythonw_path, "bot.py"])
+            else:
+                logging.warning(f"pythonw.exe не найден в {python_dir}, используем python.exe с CREATE_NO_WINDOW")
+                # Используем CREATE_NO_WINDOW для скрытия консоли
+                CREATE_NO_WINDOW = 0x08000000  # Флаг для Windows, чтобы не создавать окно
+                subprocess.Popen([python_path, "bot.py"], creationflags=CREATE_NO_WINDOW)
+            logging.info("bot.py успешно запущен без консольного окна")
             QTimer.singleShot(500, self.close)
         except Exception as e:
             logging.error(f"Ошибка запуска bot.py: {str(e)}")
