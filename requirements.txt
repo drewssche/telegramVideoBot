@@ -1,0 +1,9 @@
+cx-Freeze==8.0.0
+PySide6==6.8.0
+telethon==1.39.0
+yt-dlp==2025.2.19
+requests==2.32.3
+qasync==0.27.1
+pywin32==310
+pynvml
+psutil
