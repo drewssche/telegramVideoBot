@@ -453,7 +453,8 @@ class AppState:
         self.user_cache = {}
         self.participant_to_chats = {}
         self.switch_is_on = False
-        self.active_tasks = []  # Список для хранения активных задач
+        self.should_be_active = True
+        self.active_tasks = []
         self.task_queue = asyncio.Queue()
         self.flood_wait_until = 0
         self.flood_wait_lock = asyncio.Lock()
@@ -465,13 +466,18 @@ class AppState:
         self.processing_links = set()
         self.gpu_enabled = False
         self.only_me_mode = False
-        self.remember_me = False  # Начальное значение False
-        self.byedpi_process = None  # Для хранения процесса ByeDPI
+        self.remember_me = False
+        self.byedpi_process = None
+        self.message_handler_registered = False
+        self.youtube_unlimited_mode = False
+        self.responses_enabled_before_unlimited = True
+        # Новые поля
+        self.task_queue_items = {}  # Словарь {task_id: (chat_id, message_id, text, message, timestamp)}
+        self.chat_logs = {}  # Словарь {chat_title: [(timestamp, level, msg, sender_info), ...]}
 
     async def ensure_client_disconnected(self):
         if self.client is not None:
             try:
-                # Прямо вызываем disconnect и ожидаем его завершения
                 await self.client.disconnect()
                 logging.info("Клиент Telegram успешно отключён")
             except Exception as e:
@@ -484,7 +490,7 @@ class AppState:
             try:
                 self.byedpi_process.terminate()
                 self.byedpi_process.wait(timeout=5)
-                logging.info("⚠️ [ByeDPI] Остановлен")
+                logging.warning("⚠️ [ByeDPI] Остановлен")
             except subprocess.TimeoutExpired:
                 self.byedpi_process.kill()
                 logging.warning("⚠️ [ByeDPI] Принудительно остановлен")
@@ -498,22 +504,19 @@ state = AppState()
 # Функции обработки видео (адаптированные под Telethon)
 async def update_progress_bar_video(chat_id, message_id, url, platform, downloaded, total, last_percentage, last_update_time, last_message_text=None):
     if last_message_text is None:
-        last_message_text = [f"Обрабатываю ссылку {url}\n{platform}\n[{' ' * 10}] 0%"]  # Инициализация последнего текста
+        last_message_text = [f"Обрабатываю ссылку {url}\n{platform}\n[{' ' * 10}] 0%"]
 
     current_time = time.time()
 
-    # Проверяем, не находимся ли мы в режиме ожидания FLOOD_WAIT
     async with state.flood_wait_lock:
         if current_time < state.flood_wait_until:
             logging.info(f"Пропускаем обновление прогресс-бара: FLOOD_WAIT до {state.flood_wait_until}")
             return False
 
     if total <= 0:
-        return True  # Ничего не делаем, если total не определён
+        return True
 
-    percentage = min(int((downloaded / total) * 100), 100)  # Ограничиваем процент до 100
-    # Обновляем прогресс-бар только если процент изменился на 5% или достиг 100%,
-    # и прошло не менее 5 секунд с последнего обновления
+    percentage = min(int((downloaded / total) * 100), 100)
     if (percentage >= last_percentage[0] + 5 or percentage == 100) and (current_time - last_update_time[0] >= 5):
         bar_length = 10
         progress = bar_length * percentage / 100
@@ -522,7 +525,6 @@ async def update_progress_bar_video(chat_id, message_id, url, platform, download
         bar = '█' * filled + half + ' ' * (bar_length - filled - (1 if half else 0))
         progress_text = f"Обрабатываю ссылку {url}\n{platform}\n[{bar}] {percentage}%"
 
-        # Получаем текущее сообщение, чтобы извлечь исходный текст
         try:
             current_message = await state.client.get_messages(chat_id, ids=message_id)
             if not current_message:
@@ -533,17 +535,20 @@ async def update_progress_bar_video(chat_id, message_id, url, platform, download
             logging.warning(f"Не удалось получить текущее сообщение с ID {message_id}: {e}")
             return False
 
-        # Разделяем текст на исходный и прогресс-часть
         parts = current_text.split("➖➖➖", 1)
-        if len(parts) != 2:
-            logging.warning(f"Не удалось разделить текст сообщения для прогресс-бара: {current_text}")
-            return False
-        original_text = parts[0].strip()
+        if len(parts) == 2:
+            original_text = parts[0].strip()
+        else:
+            try:
+                original_message = await state.client.get_messages(chat_id, ids=current_message.reply_to_msg_id) if current_message.reply_to_msg_id else None
+                original_text = original_message.text if original_message else url
+                logging.debug(f"Разделитель отсутствует, взят исходный текст: {original_text}")
+            except Exception as e:
+                original_text = url
+                logging.warning(f"Не удалось получить исходное сообщение: {e}")
 
-        # Формируем новый текст с сохранением исходного
         new_text = f"{original_text}\n➖➖➖\n{progress_text}\n[BotSignature:{state.bot_signature_id}]"
 
-        # Пропускаем обновление, если текст не изменился
         if new_text == last_message_text[0]:
             logging.debug(f"Текст прогресс-бара не изменился, пропускаем обновление: {new_text}")
             return True
@@ -552,17 +557,15 @@ async def update_progress_bar_video(chat_id, message_id, url, platform, download
             await state.client.edit_message(chat_id, message_id, new_text)
             last_percentage[0] = percentage
             last_update_time[0] = current_time
-            last_message_text[0] = new_text  # Обновляем последний текст
+            last_message_text[0] = new_text
         except Exception as e:
             if "message is not modified" in str(e):
-                # Игнорируем ошибку "message is not modified" без логирования
                 return True
             elif "FLOOD_WAIT" in str(e):
-                # Если поймали FLOOD_WAIT, извлекаем время ожидания
                 wait_time = int(re.search(r"FLOOD_WAIT_(\d+)", str(e)).group(1)) if re.search(r"FLOOD_WAIT_(\d+)", str(e)) else 10
                 async with state.flood_wait_lock:
                     state.flood_wait_until = current_time + wait_time
-                logging.warning(f"FLOOD_WAIT на {wait_time} секунд при обновлении прогресс-бара, ждём до {state.flood_wait_until}")
+                logging.warning(f"FLOOD_WAIT на {wait_time} секунд, ждём до {state.flood_wait_until}")
                 await asyncio.sleep(wait_time)
                 return False
             elif "message ID is invalid" in str(e):
@@ -612,23 +615,21 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
     # Проверяем сигнатуру в текущем сообщении
     current_message = await state.client.get_messages(chat_id, ids=message_id)
     if current_message and re.search(r'\[BotSignature:[0-9a-f-]+\]', current_message.text or ""):
-        logging.info(f"⚠️ Ссылка уже обработана: {url} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
+        logging.warning(f"⚠️ Ссылка уже обработана: {url} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
         return False
 
-    # Сохраняем исходный текст сообщения, если можно редактировать
-    original_text = ""
-    if can_edit:
-        original_text = message.text or ""
+    # Сохраняем исходный текст сообщения
+    original_text = message.text or url  # Всегда сохраняем текст или URL
 
     # Формируем текст для начала обработки
     progress_text = f"Обрабатываю ссылку {url}\n{platform}\n[{' ' * 10}] 0%\n[BotSignature:{state.bot_signature_id}]"
     try:
+        initial_text = f"{original_text}\n➖➖➖\n{progress_text}"
         if can_edit:
             progress_msg = message
-            initial_text = f"{original_text}\n➖➖➖\n{progress_text}"
             await state.client.edit_message(chat_id, message_id, initial_text)
         else:
-            progress_msg = await state.client.send_message(chat_id, progress_text, reply_to=message_id)
+            progress_msg = await state.client.send_message(chat_id, initial_text, reply_to=message_id)
             if progress_msg is None or not hasattr(progress_msg, 'id'):
                 logging.error(f"🔴 Ошибка: Не удалось отправить сообщение ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
                 return False
@@ -638,7 +639,7 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
 
     last_percentage = [0]
     last_update_time = [time.time()]
-    last_message_text = [progress_text if not can_edit else initial_text]
+    last_message_text = [initial_text]
     temp_file = None
     final_file = None
     can_update_progress = [True]
@@ -687,17 +688,16 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
         'extractor_list': ['youtube'],
     }
 
-    # Добавляем прокси для ByeDPI, если он включён, и дополнительные параметры
+    # Добавляем прокси для ByeDPI, если он включён
     if get_byedpi_enabled():
         presets = get_byedpi_presets()
         active_preset = next((preset for preset in presets if preset['name'] == 'Default'), None)
         if active_preset:
             port = active_preset['port']
             ydl_opts['proxy'] = f"socks5://127.0.0.1:{port}"
-            # Добавляем параметры для улучшения работы с прокси
             ydl_opts['force_ipv4'] = True
             ydl_opts['geo_bypass'] = True
-            logging.info(f"🟢 [ByeDPI] Используется прокси socks5://127.0.0.1:{port} для загрузки видео с параметрами force_ipv4 и geo_bypass", extra={'chat_title': chat_title, 'sender_info': sender_info})
+            logging.info(f"🟢 [ByeDPI] Используется прокси socks5://127.0.0.1:{port} для загрузки видео", extra={'chat_title': chat_title, 'sender_info': sender_info})
 
     try:
         if not shutil.which('ffmpeg'):
@@ -710,7 +710,7 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
             info = ydl.extract_info(url, download=False)
             if not info or 'duration' not in info:
                 error_text = f"Видео {url} недоступно\n{platform}\n[BotSignature:{state.bot_signature_id}]"
-                final_text = error_text if not can_edit else f"{original_text}\n➖➖➖\n{error_text}"
+                final_text = f"{original_text}\n➖➖➖\n{error_text}"
                 if not can_edit:
                     await state.client.delete_messages(chat_id, progress_msg.id)
                 else:
@@ -720,7 +720,7 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
             duration = info.get('duration', 0)
             if max_duration and duration > max_duration:
                 error_text = f"Ссылка: {url}\nВидео отклонено: длительность {duration} сек > {max_duration} сек\n{platform}\n[BotSignature:{state.bot_signature_id}]"
-                final_text = error_text if not can_edit else f"{original_text}\n➖➖➖\n{error_text}"
+                final_text = f"{original_text}\n➖➖➖\n{error_text}"
                 if can_edit:
                     await state.client.edit_message(chat_id, progress_msg.id, final_text)
                 else:
@@ -794,7 +794,7 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
                     if re.search(r'\[BotSignature:[0-9a-f-]+\]', msg.text) and msg.reply_to_msg_id == message_id:
                         signature = re.search(r'\[BotSignature:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]', msg.text).group(1)
                         if signature != state.bot_signature_id:
-                            logging.info(f"⚠️ Ссылка обработана другим ботом: {url} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                            logging.warning(f"⚠️ Ссылка обработана другим ботом: {url} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
                             if not can_edit:
                                 await state.client.delete_messages(chat_id, progress_msg.id)
                             return False
@@ -809,13 +809,12 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
                     supports_streaming=True
                 )
             ]
-            success_text = f"Исходное сообщение:\n\n{original_text if can_edit else url}\n➖➖➖\n{platform}\nПрограмма по ссылке: https://github.com/drewssche/telegramVideoBot 🤖\nПоддержать: https://www.donationalerts.com/r/drews_sche 💖\n[BotSignature:{state.bot_signature_id}]"
-            final_text = success_text
+            success_text = f"Исходное сообщение:\n\n{original_text}\n➖➖➖\n{platform}\nСсылки: https://taplink.cc/drews 👈\n[BotSignature:{state.bot_signature_id}]"
             with open(final_file, 'rb') as video:
                 await state.client.edit_message(
                     chat_id,
                     progress_msg.id,
-                    final_text,
+                    success_text,
                     file=video,
                     attributes=attributes,
                     force_document=False
@@ -826,7 +825,7 @@ async def process_video(chat_id, message_id, url, platform, max_duration, messag
     except Exception as e:
         try:
             error_text = f"Видео {url} недоступно или не удалось обработать\n{platform}\n[BotSignature:{state.bot_signature_id}]"
-            final_text = error_text if not can_edit else f"{original_text}\n➖➖➖\n{error_text}"
+            final_text = f"{original_text}\n➖➖➖\n{error_text}"
             if not can_edit:
                 await state.client.delete_messages(chat_id, progress_msg.id)
             else:
@@ -909,7 +908,7 @@ async def process_video_link(chat_id, message_id, text, message):
 
     current_message = await state.client.get_messages(chat_id, ids=message_id)
     if current_message and re.search(r'\[BotSignature:[0-9a-f-]+\]', current_message.text or ""):
-        logging.info(f"⚠️ Ссылка уже обработана: {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
+        logging.warning(f"⚠️ Ссылка уже обработана: {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
         return False
 
     recent_messages = await state.client.get_messages(chat_id, limit=3)
@@ -931,7 +930,7 @@ async def process_video_link(chat_id, message_id, text, message):
         if any(link_conditions) and has_signature:
             signature = re.search(r'\[BotSignature:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]', msg_text).group(1)
             if signature != state.bot_signature_id:
-                logging.info(
+                logging.warning(
                     f"⚠️ Ссылка обработана другим ботом: {text} ({chat_title}, {sender_info})",
                     extra={'chat_title': chat_title, 'sender_info': sender_info}
                 )
@@ -958,7 +957,7 @@ async def process_video_link(chat_id, message_id, text, message):
                     if re.search(r'\[BotSignature:[0-9a-f-]+\]', msg.text) and msg.reply_to_msg_id == original_msg_id:
                         signature = re.search(r'\[BotSignature:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]', msg.text).group(1)
                         if signature != state.bot_signature_id:
-                            logging.info(f"⚠️ Ссылка обработана другим ботом: {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                            logging.warning(f"⚠️ Ссылка обработана другим ботом: {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
                             if temp_msg and hasattr(temp_msg, 'id') and not can_edit:
                                 await state.client.delete_messages(chat_id, temp_msg.id)
                             return True
@@ -968,7 +967,7 @@ async def process_video_link(chat_id, message_id, text, message):
         if pattern_name == 'instagram':
             dd_url = f"https://www.ddinstagram.com/reel/{video_id}/"
             platform_label = "Instagram 📸"
-            success_text = f"{dd_url}\n➖➖➖\nИсходное сообщение:\n\n{original_text if can_edit else text}\n➖➖➖\n{platform_label}\nПрограмма по ссылке: https://github.com/drewssche/telegramVideoBot 🤖\nПоддержать: https://www.donationalerts.com/r/drews_sche 💖\n[BotSignature:{state.bot_signature_id}]"
+            success_text = f"{dd_url}\n➖➖➖\nИсходное сообщение:\n\n{original_text if can_edit else text}\n➖➖➖\n{platform_label}\nСсылки: https://taplink.cc/drews 👈\n[BotSignature:{state.bot_signature_id}]"
             temp_msg = None
             try:
                 if can_edit:
@@ -997,7 +996,7 @@ async def process_video_link(chat_id, message_id, text, message):
             url = match.group(0)
             dd_url = url.replace('.tiktok.com', '.vxtiktok.com').replace('vm.tiktok.com', 'vm.vxtiktok.com').replace('vt.tiktok.com', 'vm.vxtiktok.com')
             platform_label = "TikTok 🎵"
-            success_text = f"{dd_url}\n➖➖➖\nИсходное сообщение:\n\n{original_text if can_edit else text}\n➖➖➖\n{platform_label}\nПрограмма по ссылке: https://github.com/drewssche/telegramVideoBot 🤖\nПоддержать: https://www.donationalerts.com/r/drews_sche 💖\n[BotSignature:{state.bot_signature_id}]"
+            success_text = f"{dd_url}\n➖➖➖\nИсходное сообщение:\n\n{original_text if can_edit else text}\n➖➖➖\n{platform_label}\nСсылки: https://taplink.cc/drews 👈\n[BotSignature:{state.bot_signature_id}]"
             temp_msg = None
             try:
                 if can_edit:
@@ -1010,7 +1009,7 @@ async def process_video_link(chat_id, message_id, text, message):
                     return False
 
                 if await check_new_messages(message_id, temp_msg):
-                    logging.info(f"⚠️ TikTok: Ссылка перехвачена другим ботом ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                    logging.warning(f"⚠️ TikTok: Ссылка перехвачена другим ботом ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
                     return False
 
                 logging.info(f"✅ TikTok: Ссылка обработана ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
@@ -1025,7 +1024,7 @@ async def process_video_link(chat_id, message_id, text, message):
             url = match.group(0)
             dd_url = re.sub(r'^(https?://)(?:www\.)?(?:x|twitter)\.com', r'\1fxtwitter.com', url)
             platform_label = "Twitter (X) 🐦"
-            success_text = f"{dd_url}\n➖➖➖\nИсходное сообщение:\n\n{original_text if can_edit else text}\n➖➖➖\n{platform_label}\nПрограмма по ссылке: https://github.com/drewssche/telegramVideoBot 🤖\nПоддержать: https://www.donationalerts.com/r/drews_sche 💖\n[BotSignature:{state.bot_signature_id}]"
+            success_text = f"{dd_url}\n➖➖➖\nИсходное сообщение:\n\n{original_text if can_edit else text}\n➖➖➖\n{platform_label}\nСсылки: https://taplink.cc/drews 👈\n[BotSignature:{state.bot_signature_id}]"
             temp_msg = None
             try:
                 if can_edit:
@@ -1038,7 +1037,7 @@ async def process_video_link(chat_id, message_id, text, message):
                     return False
 
                 if await check_new_messages(message_id, temp_msg):
-                    logging.info(f"⚠️ Twitter: Ссылка перехвачена другим ботом ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
+                    logging.warning(f"⚠️ Twitter: Ссылка перехвачена другим ботом ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
                     return False
 
                 logging.info(f"✅ Twitter: Ссылка обработана ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
@@ -1055,7 +1054,7 @@ async def process_video_link(chat_id, message_id, text, message):
             result = await process_video(chat_id, message_id, url, "YouTube 📺", 180, message, sender_info, original_url)
             return result  # Убираем избыточное логирование
 
-    logging.info(f"⚠️ Ссылка не соответствует ни одной платформе: {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
+    logging.warning(f"⚠️ Ссылка не соответствует ни одной платформе: {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
     return False
 
 async def clean_temp_files():
@@ -3793,14 +3792,11 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
         screen = QApplication.primaryScreen().geometry()
         self.move((screen.width() - self.width()) // 2, (screen.height() - self.height()) // 2)
 
-        # Установка иконки для окна
         icon_path = "icons/256.ico"
         self.setWindowIcon(QIcon(icon_path))
 
-        # Добавляем меню-бар через миксин
         self.setup_menu_bar()
 
-        # Создаем центральный виджет с QTabWidget
         widget = QWidget()
         self.setCentralWidget(widget)
         layout = QVBoxLayout(widget)
@@ -3808,36 +3804,58 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
         self.tab_widget = QTabWidget()
         layout.addWidget(self.tab_widget)
 
-        # Создаём self.log_list до setup_logging()
         self.log_list = QListWidget()
         self.log_list.setFixedHeight(200)
         self.log_list.setMinimumWidth(250)
 
-        # Настройка логирования
         self.setup_logging()
 
-        # Настройка вкладок
         self.setup_main_tab()
         self.setup_responses_tab()
         self.setup_byedpi_tab()
 
-        # Инициализация состояния
         self.load_platform_settings()
         self.update_switch_state()
         self.update_platform_switches()
         self.load_chats_stats()
 
-        self.task_manager_task = asyncio.create_task(self.task_manager())
+        logging.debug(f"Инициализация ControlPanelWindow, state.switch_is_on = {state.switch_is_on}, state.should_be_active = {state.should_be_active}")
+        self.switch_button.setChecked(state.switch_is_on)
+        self.update_switch_state()
+
+        if state.should_be_active and not state.switch_is_on:
+            state.switch_is_on = True
+            self.switch_button.setChecked(True)
+            self.update_switch_state()
+            self.uptime_seconds = 0
+            self.uptime_timer.start(1000)
+            if not hasattr(self, 'task_manager_task') or self.task_manager_task.done():
+                self.task_manager_task = asyncio.create_task(self.task_manager())
+                logging.debug("Task manager запущен при восстановлении состояния")
+            if state.message_handler_registered:
+                state.client.remove_event_handler(self.message_handler)
+                logging.debug("Предыдущий message_handler удалён перед восстановлением")
+            if state.only_me_mode:
+                state.client.add_event_handler(self.message_handler, events.NewMessage())
+                self.status_label.setText("Режим: Только мои сообщения")
+            else:
+                selected_chats = [chat_id for chat_id, _, _ in get_selected_chats()]
+                state.client.add_event_handler(self.message_handler, events.NewMessage(chats=selected_chats))
+                self.status_label.setText("Бот запущен")
+            state.message_handler_registered = True
+            logging.info("🟢 Бот восстановлен в активное состояние")
+
+        # Новые окна
+        self.tasks_window = None
+        self.stats_window = None
 
     def setup_main_tab(self):
         main_tab = QWidget()
         layout = QVBoxLayout(main_tab)
 
-        # Uptime label
         self.uptime_label = QLabel("Время работы: ⏰ 00:00:00 | Задачи: 0/0")
         layout.addWidget(self.uptime_label)
 
-        # Платформы
         layout.addSpacing(25)
         platforms_layout = QVBoxLayout()
         platforms_layout.setSpacing(10)
@@ -4002,7 +4020,6 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
 
         layout.addLayout(platforms_layout)
 
-        # Основной переключатель
         layout.addSpacing(25)
         switch_layout = QHBoxLayout()
         self.off_label = QLabel("Выкл")
@@ -4024,7 +4041,6 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
         switch_layout.addWidget(self.on_label, alignment=Qt.AlignLeft)
         layout.addLayout(switch_layout)
 
-        # CPU/GPU Switch
         layout.addSpacing(10)
         gpu_layout = QHBoxLayout()
         gpu_layout.addStretch()
@@ -4048,14 +4064,12 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
         gpu_layout.addStretch()
         layout.addLayout(gpu_layout)
 
-        # Текущий режим
         self.current_mode_label = QLabel("")
         self.current_mode_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.current_mode_label)
 
         layout.addSpacing(25)
 
-        # Списки логов, задач и статистики
         lists_layout = QHBoxLayout()
         lists_layout.setAlignment(Qt.AlignTop)
 
@@ -4064,46 +4078,49 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
         log_button = QPushButton("Открыть лог 📜")
         log_button.setObjectName("update_button")
         log_button.setFixedSize(120, 40)
-        # self.log_list уже создан в __init__
-        log_container.addSpacing(5)  # Отступ сверху для выравнивания
+        log_container.addSpacing(5)
         log_container.addWidget(log_button, alignment=Qt.AlignCenter)
         log_container.addWidget(self.log_list)
         lists_layout.addLayout(log_container, stretch=3)
 
         # Задачи
         tasks_container = QVBoxLayout()
+        tasks_button = QPushButton("Задачи")
+        tasks_button.setObjectName("update_button")
+        tasks_button.setFixedSize(120, 40)
         tasks_label = QLabel("Задачи")
         tasks_label.setStyleSheet("font-weight: bold;")
-        tasks_label.setFixedHeight(40)  # Такая же высота, как у кнопки
+        tasks_label.setFixedHeight(40)
         self.task_list_widget = QListWidget()
-        self.task_list_widget.setFixedHeight(200)  # Такая же высота, как у log_list
+        self.task_list_widget.setFixedHeight(200)
         self.task_list_widget.setMinimumWidth(200)
-        tasks_container.addSpacing(5)  # Отступ сверху для выравнивания
-        tasks_container.addWidget(tasks_label, alignment=Qt.AlignCenter)
+        tasks_container.addSpacing(5)
+        tasks_container.addWidget(tasks_button, alignment=Qt.AlignCenter)
         tasks_container.addWidget(self.task_list_widget)
         lists_layout.addLayout(tasks_container, stretch=2)
 
         # Статистика
         stats_container = QVBoxLayout()
+        stats_button = QPushButton("Детальная статистика")
+        stats_button.setObjectName("update_button")
+        stats_button.setFixedSize(140, 40)
         stats_label = QLabel("Статистика")
         stats_label.setStyleSheet("font-weight: bold;")
-        stats_label.setFixedHeight(40)  # Такая же высота, как у кнопки
+        stats_label.setFixedHeight(40)
         self.chats_stats_list = QListWidget()
-        self.chats_stats_list.setFixedHeight(200)  # Такая же высота, как у log_list
+        self.chats_stats_list.setFixedHeight(200)
         self.chats_stats_list.setMinimumWidth(200)
-        stats_container.addSpacing(5)  # Отступ сверху для выравнивания
-        stats_container.addWidget(stats_label, alignment=Qt.AlignCenter)
+        stats_container.addSpacing(5)
+        stats_container.addWidget(stats_button, alignment=Qt.AlignCenter)
         stats_container.addWidget(self.chats_stats_list)
         lists_layout.addLayout(stats_container, stretch=1)
 
         layout.addLayout(lists_layout)
 
-        # Лейбл текущего состояния
         self.status_label = QLabel("")
         self.status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.status_label)
 
-        # Кнопка "Назад"
         buttons_layout = QHBoxLayout()
         self.back_button = QPushButton("⬅️ Назад")
         self.back_button.setObjectName("back_button_control")
@@ -4112,7 +4129,6 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
         buttons_layout.addWidget(self.back_button)
         layout.addLayout(buttons_layout)
 
-        # Таймеры и анимации
         self.uptime_timer = QTimer()
         self.uptime_timer.timeout.connect(self.update_uptime)
         self.uptime_seconds = 0
@@ -4137,7 +4153,6 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
         self.gpu_animation.setDuration(200)
         self.previous_gpu_state = False
 
-        # Подключение сигналов
         self.youtube_switch.clicked.connect(lambda: self.update_platform("youtube", self.youtube_switch.isChecked()))
         self.instagram_switch.clicked.connect(lambda: self.update_platform("instagram", self.instagram_switch.isChecked()))
         self.tiktok_switch.clicked.connect(lambda: self.update_platform("tiktok", self.tiktok_switch.isChecked()))
@@ -4146,6 +4161,8 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
         self.back_button.clicked.connect(self.show_settings_window)
         self.gpu_switch.clicked.connect(self.update_gpu_switch)
         log_button.clicked.connect(self.open_log_file)
+        tasks_button.clicked.connect(self.open_tasks_window)
+        stats_button.clicked.connect(self.open_detailed_stats_window)
 
         self.tab_widget.addTab(main_tab, "⚙️ Основная")
 
@@ -4155,6 +4172,23 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
             QDesktopServices.openUrl(QUrl.fromLocalFile(log_file_path))
         else:
             self.status_label.setText("❌ Файл bot.log не найден")
+
+    def open_tasks_window(self):
+        if not self.tasks_window or not self.tasks_window.isVisible():
+            self.tasks_window = TasksWindow(self)
+            self.tasks_window.show()
+
+    def open_detailed_stats_window(self):
+        if not self.stats_window or not self.stats_window.isVisible():
+            self.stats_window = DetailedStatsWindow(self)
+            self.stats_window.show()
+
+    def closeEvent(self, event):
+        if self.tasks_window:
+            self.tasks_window.close()
+        if self.stats_window:
+            self.stats_window.close()
+        super().closeEvent(event)
 
     def setup_responses_tab(self):
         responses_tab = QWidget()
@@ -4619,22 +4653,27 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
 
     def toggle_switch(self):
         state.switch_is_on = self.switch_button.isChecked()
+        state.should_be_active = state.switch_is_on  # Синхронизируем намерение с текущим состоянием
         self.update_switch_state()
         if state.switch_is_on:
             self.uptime_seconds = 0
             self.uptime_timer.start(1000)
             self.log_list.clear()
-            # Очищаем словари статистики
-            state.links_processed_per_chat.clear()
-            state.errors_per_chat.clear()
-            # Подгружаем чаты только если режим "Только мои сообщения" выключен
-            if not state.only_me_mode:
-                for chat_id, _, _ in get_selected_chats():
-                    state.links_processed_per_chat[chat_id] = 0
-                    state.errors_per_chat[chat_id] = 0
+            # Инициализируем словари с нормализованными chat_id, если пусты
+            if not state.links_processed_per_chat:
+                if not state.only_me_mode:
+                    for chat_id, _, _ in get_selected_chats():
+                        normalized_chat_id = abs(chat_id)
+                        if str(chat_id).startswith('-100'):
+                            normalized_chat_id = int(str(chat_id)[4:])
+                        state.links_processed_per_chat[normalized_chat_id] = 0
+                        state.errors_per_chat[normalized_chat_id] = 0
             self.update_chats_stats()
+            # Удаляем обработчик, если он уже зарегистрирован, перед новой регистрацией
+            if state.message_handler_registered:
+                state.client.remove_event_handler(self.message_handler)
+                logging.debug("Предыдущий message_handler удалён перед включением")
             if state.only_me_mode:
-                # Регистри participation для всех чатов
                 state.client.add_event_handler(self.message_handler, events.NewMessage())
                 self.status_label.setText("Режим: Только мои сообщения")
                 logging.info("🟢 Бот запущен")
@@ -4643,6 +4682,11 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                 state.client.add_event_handler(self.message_handler, events.NewMessage(chats=selected_chats))
                 self.status_label.setText("Бот запущен")
                 logging.info("🟢 Бот запущен")
+            state.message_handler_registered = True
+            # Запускаем task_manager если он не активен
+            if not hasattr(self, 'task_manager_task') or self.task_manager_task.done():
+                self.task_manager_task = asyncio.create_task(self.task_manager())
+                logging.debug("Task manager запущен при включении")
         else:
             self.uptime_timer.stop()
             for task in state.active_tasks:
@@ -4650,7 +4694,10 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
             state.active_tasks.clear()
             while not state.task_queue.empty():
                 state.task_queue.get_nowait()
-            state.client.remove_event_handler(self.message_handler)
+            if state.message_handler_registered:
+                state.client.remove_event_handler(self.message_handler)
+                state.message_handler_registered = False
+                logging.debug("message_handler удалён при выключении")
             self.status_label.setText("Бот выключен")
             logging.info("🔴 Бот выключен")
         self.update_task_indicators()
@@ -4768,17 +4815,16 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
             logging.debug(f"Игнорируем своё сообщение об ошибке: {text}", extra={'chat_title': chat_title, 'sender_info': sender_info})
             return
 
-        # Игнорируем уже обработанные ссылки
         if "vm.vxtiktok.com" in text or "vt.vxtiktok.com" in text or "vxtiktok.com" in text:
-            logging.info(f"⚠️ Обработанная ссылка пропущена (TikTok): {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
+            logging.warning(f"⚠️ Обработанная ссылка пропущена (TikTok): {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
             return
 
         if "fxtwitter.com" in text:
-            logging.info(f"⚠️ Обработанная ссылка пропущена (Twitter): {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
+            logging.warning(f"⚠️ Обработанная ссылка пропущена (Twitter): {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
             return
 
         if "ddinstagram.com" in text:
-            logging.info(f"⚠️ Обработанная ссылка пропущена (Instagram): {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
+            logging.warning(f"⚠️ Обработанная ссылка пропущена (Instagram): {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
             return
 
         signature_match = re.search(r'\[BotSignature:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]', text)
@@ -4797,14 +4843,12 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                 return
             return
 
-        # Проверка режима "Только мои сообщения"
         if state.only_me_mode:
             if message.sender_id != state.current_user_id:
                 logging.debug(f"Сообщение игнорируется (режим 'Только мои сообщения'): {text}", extra={'chat_title': chat_title, 'sender_info': sender_info})
                 return
         else:
-            # Обычный режим: проверяем, включён ли тумблер и есть ли чат в списке
-            if not state.switch_is_on or normalized_chat_id not in {chat_id for chat_id, _, _ in get_selected_chats()} or not text:
+            if not state.switch_is_on or normalized_chat_id not in {abs(cid) if not str(cid).startswith('-100') else int(str(cid)[4:]) for cid, _, _ in get_selected_chats()} or not text:
                 return
 
         link_found = False
@@ -4818,7 +4862,12 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
             return
 
         is_own_message = message.sender_id == state.current_user_id
-        is_forwarded = message.fwd_from is not None
+
+        # Проверка на дублирование
+        if any(task_data[2] == text for task_data in state.task_queue_items.values()) or \
+           any(task._coro.cr_frame.f_locals.get('text', '') == text for task in state.active_tasks if task._coro.cr_code.co_name == 'process_video_link'):
+            logging.debug(f"Ссылка уже в обработке или очереди: {text}", extra={'chat_title': chat_title, 'sender_info': sender_info})
+            return
 
         if is_own_message:
             state.processing_links.add(text)
@@ -4837,6 +4886,9 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                         state.processing_links.remove(text)
                     self.update_chats_stats()
             else:
+                task_id = str(uuid.uuid4())
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                state.task_queue_items[task_id] = (chat_id, message.id, text, message, timestamp)
                 logging.info(f"⏳ В очередь: {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
                 await state.task_queue.put((chat_id, message.id, text, message))
                 self.update_task_indicators()
@@ -4865,10 +4917,7 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
             if any(link_conditions) and has_signature:
                 signature = re.search(r'\[BotSignature:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\]', msg_text).group(1)
                 if signature != state.bot_signature_id:
-                    logging.info(
-                        f"⚠️ Ссылка обработана другим ботом: {text} ({chat_title}, {sender_info})",
-                        extra={'chat_title': chat_title, 'sender_info': sender_info}
-                    )
+                    logging.warning(f"⚠️ Ссылка обработана другим ботом: {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
                     platform = {"youtube": "YouTube 📺", "tiktok": "TikTok 🎵", "twitter": "Twitter 🐦", "instagram": "Instagram 📸"}.get(platform_name)
                     item = QListWidgetItem(f"⚠️ {platform}: {text} (Перехвачено другим ботом)")
                     self.task_list_widget.addItem(item)
@@ -4894,6 +4943,9 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                     state.processing_links.remove(text)
                 self.update_chats_stats()
         else:
+            task_id = str(uuid.uuid4())
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            state.task_queue_items[task_id] = (chat_id, message.id, text, message, timestamp)
             logging.info(f"⏳ В очередь: {text} ({chat_title}, {sender_info})", extra={'chat_title': chat_title, 'sender_info': sender_info})
             await state.task_queue.put((chat_id, message.id, text, message))
             self.update_task_indicators()
@@ -4907,7 +4959,6 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
 
             if state.switch_is_on and len(state.active_tasks) < 5 and not state.task_queue.empty():
                 chat_id, message_id, text, message = await state.task_queue.get()
-                # Нормализация chat_id
                 normalized_chat_id = abs(chat_id)
                 if str(chat_id).startswith('-100'):
                     normalized_chat_id = int(str(chat_id)[4:])
@@ -4947,6 +4998,11 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                         state.active_tasks.remove(task)
                     if text in state.processing_links:
                         state.processing_links.remove(text)
+                    # Удаляем задачу из task_queue_items, если она там есть
+                    for task_id, task_data in list(state.task_queue_items.items()):
+                        if task_data[2] == text:
+                            del state.task_queue_items[task_id]
+                            break
                     self.update_chats_stats()
                     self.update_task_indicators()
                     await asyncio.sleep(3)
@@ -4956,13 +5012,18 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
 
     def update_task_indicators(self):
         youtube_active = youtube_queued = tiktok_active = tiktok_queued = twitter_active = twitter_queued = instagram_active = instagram_queued = 0
-        self.task_list_widget.clear()  # Очищаем список задач
+        self.task_list_widget.clear()
+        displayed_links = set()  # Для отслеживания уже добавленных ссылок
 
         # Активные задачи
         for task in state.active_tasks:
             coro = task._coro
             if coro.cr_code.co_name == 'process_video_link':
                 text = coro.cr_frame.f_locals.get('text', '')
+                if text in displayed_links:
+                    continue  # Пропускаем, если ссылка уже отображена
+                displayed_links.add(text)
+                chat_id = coro.cr_frame.f_locals.get('chat_id', 'N/A')
                 platform = None
                 if VIDEO_URL_PATTERNS['youtube'].search(text):
                     youtube_active += 1
@@ -4977,12 +5038,14 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                     instagram_active += 1
                     platform = "Instagram 📸"
                 if platform:
-                    item = QListWidgetItem(f"🎥 {platform}: {text} (Обработка)")
+                    item = QListWidgetItem(f"🎥 {platform}: {text} (Обработка) | Chat ID: {chat_id}")
                     self.task_list_widget.addItem(item)
 
         # Задачи в очереди
-        queue_items = list(state.task_queue._queue)
-        for _, _, text, _ in queue_items:
+        for task_id, (chat_id, _, text, _, timestamp) in state.task_queue_items.items():
+            if text in displayed_links:
+                continue  # Пропускаем, если ссылка уже отображена
+            displayed_links.add(text)
             platform = None
             if VIDEO_URL_PATTERNS['youtube'].search(text):
                 youtube_queued += 1
@@ -4997,17 +5060,16 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                 instagram_queued += 1
                 platform = "Instagram 📸"
             if platform:
-                item = QListWidgetItem(f"⏳ {platform}: {text} (Ожидание)")
+                item = QListWidgetItem(f"⏳ {platform}: {text} (Ожидание) | Chat ID: {chat_id} | Добавлено: {timestamp}")
                 self.task_list_widget.addItem(item)
 
-        # Обновляем индикаторы платформ
         self.youtube_task_indicator.setText(f"📺 {youtube_active}/{youtube_queued}")
         self.youtube_progress.setValue(youtube_active + youtube_queued)
         self.tiktok_task_indicator.setText(f"🎵 {tiktok_active}/{tiktok_queued}")
         self.tiktok_progress.setValue(tiktok_active + tiktok_queued)
         self.twitter_task_indicator.setText(f"🐦 {twitter_active}/{twitter_queued}")
         self.twitter_progress.setValue(twitter_active + twitter_queued)
-        self.instagram_task_indicator.setText(f"")  # Instagram всегда 0/0, так как мгновенная обработка
+        self.instagram_task_indicator.setText(f"")
         self.instagram_progress.setValue(0)
 
     def update_gpu_switch(self):
@@ -5090,15 +5152,19 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
         total_errors = sum(state.errors_per_chat.values())
         
         # Общая статистика с эмодзи
-        self.chats_stats_list.addItem(QListWidgetItem(f"📊 {total_links}"))
+        self.chats_stats_list.addItem(QListWidgetItem(f"✅ {total_links}"))
         self.chats_stats_list.addItem(QListWidgetItem(f"❌ {total_errors}"))
         self.chats_stats_list.addItem(QListWidgetItem(""))  # Пустая строка для разделения
         
         # Статистика по чатам
         for chat_id, title, _ in get_selected_chats():
-            links_count = state.links_processed_per_chat.get(chat_id, 0)
-            errors_count = state.errors_per_chat.get(chat_id, 0)
-            item = QListWidgetItem(f"💬 {title}: 📊 {links_count} ❌ {errors_count}")
+            # Нормализация chat_id
+            normalized_chat_id = abs(chat_id)
+            if str(chat_id).startswith('-100'):
+                normalized_chat_id = int(str(chat_id)[4:])
+            links_count = state.links_processed_per_chat.get(normalized_chat_id, 0)
+            errors_count = state.errors_per_chat.get(normalized_chat_id, 0)
+            item = QListWidgetItem(f"💬 {title}: ✅ {links_count} ❌ {errors_count}")
             item.setData(Qt.UserRole, chat_id)
             self.chats_stats_list.addItem(item)
 
@@ -5108,7 +5174,7 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
         total_errors = sum(state.errors_per_chat.values())
         
         # Общая статистика с эмодзи
-        self.chats_stats_list.addItem(QListWidgetItem(f"📊 {total_links}"))
+        self.chats_stats_list.addItem(QListWidgetItem(f"✅ {total_links}"))
         self.chats_stats_list.addItem(QListWidgetItem(f"❌ {total_errors}"))
         
         # Добавляем статистику по чатам только если режим "Только мои сообщения" выключен
@@ -5117,9 +5183,13 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
             try:
                 # Статистика по чатам
                 for chat_id, title, _ in get_selected_chats():
-                    links_count = state.links_processed_per_chat.get(chat_id, 0)
-                    errors_count = state.errors_per_chat.get(chat_id, 0)
-                    item = QListWidgetItem(f"💬 {title}: 📊 {links_count} ❌ {errors_count}")
+                    # Нормализация chat_id
+                    normalized_chat_id = abs(chat_id)
+                    if str(chat_id).startswith('-100'):
+                        normalized_chat_id = int(str(chat_id)[4:])
+                    links_count = state.links_processed_per_chat.get(normalized_chat_id, 0)
+                    errors_count = state.errors_per_chat.get(normalized_chat_id, 0)
+                    item = QListWidgetItem(f"💬 {title}: ✅ {links_count} ❌ {errors_count}")
                     item.setData(Qt.UserRole, chat_id)
                     self.chats_stats_list.addItem(item)
             except Exception as e:
@@ -5127,6 +5197,7 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
                 self.chats_stats_list.addItem(QListWidgetItem(f"❗ Ошибка загрузки чатов: {str(e)}"))
 
     def show_settings_window(self):
+        logging.debug(f"Переход к настройкам, state.switch_is_on = {state.switch_is_on}, state.should_be_active = {state.should_be_active}")
         if state.switch_is_on:
             self.switch_button.setChecked(False)
             state.switch_is_on = False
@@ -5136,13 +5207,21 @@ class ControlPanelWindow(QMainWindow, MenuBarMixin):
             for task in state.active_tasks:
                 task.cancel()
             state.active_tasks.clear()
-            state.client.remove_event_handler(self.message_handler)
+            if state.message_handler_registered:
+                state.client.remove_event_handler(self.message_handler)
+                state.message_handler_registered = False
+                logging.debug("message_handler удалён при переходе к настройкам")
             logging.info("Все задачи остановлены, обработчик событий удалён")
+            # Сохраняем намерение быть активным
+            state.should_be_active = True
+        else:
+            # Если бот уже выключен, сохраняем текущее состояние активности
+            state.should_be_active = False
 
         # Останавливаем ByeDPI при переходе к настройкам
         state.stop_byedpi()
 
-        # Синхронизируем состояние тумблера с базой данных
+        # Синхронизируем состояние тумблера ByeDPI с базой данных
         self.byedpi_switch.setChecked(get_byedpi_enabled())
         self.update_byedpi_switch_state()
 
@@ -5195,25 +5274,22 @@ class QListWidgetHandler(logging.Handler):
         if "Uploading file of" in msg or "Got difference for" in msg:
             return
 
-        # Форматирование времени: убираем миллисекунды
         try:
-            # record.asctime имеет формат "YYYY-MM-DD HH:MM:SS,sss"
             log_time = datetime.strptime(record.asctime, "%Y-%m-%d %H:%M:%S,%f")
-            formatted_time = log_time.strftime("%Y-%m-%d %H:%M:%S")  # Оставляем только до секунд
+            formatted_time = log_time.strftime("%Y-%m-%d %H:%M:%S")
         except ValueError:
-            formatted_time = record.asctime  # Если формат не совпадает, оставляем как есть
+            formatted_time = record.asctime
 
-        # Добавляем информацию о чате и пользователе, только если её нет в сообщении
         chat_info = ""
-        if hasattr(record, 'chat_title') and hasattr(record, 'sender_info'):
-            chat_info = f" ({record.chat_title}, {record.sender_info})"
-            # Проверяем, есть ли уже chat_info в сообщении
+        chat_title = getattr(record, 'chat_title', None)
+        sender_info = getattr(record, 'sender_info', None)
+        if chat_title and sender_info:
+            chat_info = f" ({chat_title}, {sender_info})"
             if chat_info.strip() in msg:
-                chat_info = ""  # Не добавляем, если уже есть
+                chat_info = ""
 
-        # Убираем длинные технические детали из ошибок для виджета
         if record.levelname == 'ERROR' and " - " in msg:
-            short_msg = msg.split(" - ")[0]  # Берём только часть до " - "
+            short_msg = msg.split(" - ")[0]
         else:
             short_msg = msg
 
@@ -5221,21 +5297,242 @@ class QListWidgetHandler(logging.Handler):
         item = QListWidgetItem(formatted_msg)
         item.setToolTip(formatted_msg)
 
-        # Устанавливаем цвет текста в зависимости от уровня лога
         if record.levelname == 'ERROR':
-            item.setForeground(QColor('red'))  # Красный для ошибок
+            item.setForeground(QColor('red'))
         elif record.levelname == 'WARNING':
-            item.setForeground(QColor('yellow'))  # Жёлтый для предупреждений
+            item.setForeground(QColor('yellow'))
         elif record.levelname == 'INFO':
-            item.setForeground(QColor('light green'))  # Зелёный для информации
+            item.setForeground(QColor('light green'))
         elif record.levelname == 'DEBUG':
-            item.setForeground(QColor('gray'))  # Серый для отладки
+            item.setForeground(QColor('gray'))
 
         self.list_widget.addItem(item)
 
         if self.list_widget.count() > 1000:
             self.list_widget.takeItem(0)
         self.list_widget.scrollToBottom()
+
+        # Сохранение в state.chat_logs
+        if chat_title:
+            if chat_title not in state.chat_logs:
+                state.chat_logs[chat_title] = []
+            state.chat_logs[chat_title].append((formatted_time, record.levelname, short_msg, sender_info))
+
+class TasksWindow(QMainWindow):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Задачи")
+        self.setFixedSize(900, 600)
+        self.setWindowIcon(QIcon("icons/256.ico"))
+
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+
+        self.task_list = QListWidget()
+        layout.addWidget(self.task_list)
+
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(self.update_tasks)
+        self.update_timer.start(1000)
+
+        self.update_tasks()
+
+    def update_tasks(self):
+        self.task_list.clear()
+        displayed_links = set()
+
+        # Активные задачи
+        for task in state.active_tasks:
+            coro = task._coro
+            if coro.cr_code.co_name == 'process_video_link':
+                text = coro.cr_frame.f_locals.get('text', '')
+                if text in displayed_links:
+                    continue
+                displayed_links.add(text)
+                chat_id = coro.cr_frame.f_locals.get('chat_id', 'N/A')
+                platform = None
+                if VIDEO_URL_PATTERNS['youtube'].search(text):
+                    platform = "YouTube 📺"
+                elif VIDEO_URL_PATTERNS['tiktok'].search(text):
+                    platform = "TikTok 🎵"
+                elif VIDEO_URL_PATTERNS['twitter'].search(text):
+                    platform = "Twitter 🐦"
+                elif VIDEO_URL_PATTERNS['instagram'].search(text):
+                    platform = "Instagram 📸"
+                if platform:
+                    item_widget = QWidget()
+                    item_layout = QHBoxLayout(item_widget)
+                    label = QLabel(f"🎥 {platform}: {text} (Обработка) | Chat ID: {chat_id}")
+                    delete_button = QPushButton("Удалить")
+                    delete_button.setFixedSize(80, 30)
+                    delete_button.clicked.connect(lambda _, t=task: self.delete_task(t, None))
+                    item_layout.addWidget(label)
+                    item_layout.addStretch()
+                    item_layout.addWidget(delete_button)
+                    list_item = QListWidgetItem(self.task_list)
+                    list_item.setSizeHint(item_widget.sizeHint())
+                    self.task_list.addItem(list_item)
+                    self.task_list.setItemWidget(list_item, item_widget)
+
+        # Задачи в очереди
+        for task_id, (chat_id, _, text, _, timestamp) in state.task_queue_items.items():
+            if text in displayed_links:
+                continue
+            displayed_links.add(text)
+            platform = None
+            if VIDEO_URL_PATTERNS['youtube'].search(text):
+                platform = "YouTube 📺"
+            elif VIDEO_URL_PATTERNS['tiktok'].search(text):
+                platform = "TikTok 🎵"
+            elif VIDEO_URL_PATTERNS['twitter'].search(text):
+                platform = "Twitter 🐦"
+            elif VIDEO_URL_PATTERNS['instagram'].search(text):
+                platform = "Instagram 📸"
+            if platform:
+                item_widget = QWidget()
+                item_layout = QHBoxLayout(item_widget)
+                label = QLabel(f"⏳ {platform}: {text} (Ожидание) | Chat ID: {chat_id} | Добавлено: {timestamp}")
+                delete_button = QPushButton("Удалить")
+                delete_button.setFixedSize(80, 30)
+                delete_button.clicked.connect(lambda _, tid=task_id: self.delete_task(None, tid))
+                item_layout.addWidget(label)
+                item_layout.addStretch()
+                item_layout.addWidget(delete_button)
+                list_item = QListWidgetItem(self.task_list)
+                list_item.setSizeHint(item_widget.sizeHint())
+                self.task_list.addItem(list_item)
+                self.task_list.setItemWidget(list_item, item_widget)
+
+    def delete_task(self, task, task_id):
+        # Переменные для логирования
+        text = None
+        chat_title = "unknown"
+        sender_info = "system"
+
+        if task:  # Активная задача
+            coro = task._coro
+            if coro.cr_code.co_name == 'process_video_link':
+                text = coro.cr_frame.f_locals.get('text', '')
+                chat_id = coro.cr_frame.f_locals.get('chat_id', 'N/A')
+                message = coro.cr_frame.f_locals.get('message', None)
+                try:
+                    chat_entity = asyncio.get_event_loop().run_until_complete(
+                        state.client.get_entity(chat_id)
+                    )
+                    chat_title = chat_entity.title if hasattr(chat_entity, 'title') else f"{chat_entity.first_name or ''} {chat_entity.last_name or ''}".strip()
+                except Exception:
+                    chat_title = str(chat_id)
+                try:
+                    sender = asyncio.get_event_loop().run_until_complete(
+                        message.get_sender()
+                    )
+                    sender_info = f"для @{sender.username or ''} {sender.first_name or ''} {sender.last_name or ''}".strip()
+                except Exception:
+                    sender_info = "для неизвестного пользователя"
+            task.cancel()
+            if task in state.active_tasks:
+                state.active_tasks.remove(task)
+
+        elif task_id:  # Задача в очереди
+            if task_id in state.task_queue_items:
+                chat_id, _, text, message, _ = state.task_queue_items[task_id]
+                try:
+                    chat_entity = asyncio.get_event_loop().run_until_complete(
+                        state.client.get_entity(chat_id)
+                    )
+                    chat_title = chat_entity.title if hasattr(chat_entity, 'title') else f"{chat_entity.first_name or ''} {chat_entity.last_name or ''}".strip()
+                except Exception:
+                    chat_title = str(chat_id)
+                try:
+                    sender = asyncio.get_event_loop().run_until_complete(
+                        message.get_sender()
+                    )
+                    sender_info = f"для @{sender.username or ''} {sender.first_name or ''} {sender.last_name or ''}".strip()
+                except Exception:
+                    sender_info = "для неизвестного пользователя"
+                del state.task_queue_items[task_id]
+                new_queue = asyncio.Queue()
+                for tid, (cid, mid, txt, msg, ts) in state.task_queue_items.items():
+                    new_queue.put_nowait((cid, mid, txt, msg))
+                state.task_queue = new_queue
+
+        # Логирование удаления
+        if text:
+            logging.warning(
+                f"⚠️ Задача удалена: {text} ({chat_title}, {sender_info})",
+                extra={'chat_title': chat_title, 'sender_info': sender_info}
+            )
+
+        self.update_tasks()
+        if self.parent():
+            self.parent().update_task_indicators()
+
+class DetailedStatsWindow(QMainWindow):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Детальная статистика")
+        self.setFixedSize(900, 600)
+        self.setWindowIcon(QIcon("icons/256.ico"))
+
+        # Центральный виджет
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
+
+        self.chat_list = QListWidget()
+        self.log_list = QListWidget()
+        self.log_list.setVisible(False)
+        layout.addWidget(self.chat_list)
+        layout.addWidget(self.log_list)
+
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(self.update_stats)
+        self.update_timer.start(1000)  # 1 секунда
+
+        self.chat_list.itemClicked.connect(self.toggle_logs)
+        self.current_chat = None
+        self.update_stats()
+
+    def update_stats(self):
+        self.chat_list.clear()
+        for chat_id, title, _ in get_selected_chats():
+            normalized_chat_id = abs(chat_id)
+            if str(chat_id).startswith('-100'):
+                normalized_chat_id = int(str(chat_id)[4:])
+            links_count = state.links_processed_per_chat.get(normalized_chat_id, 0)
+            errors_count = state.errors_per_chat.get(normalized_chat_id, 0)
+            item = QListWidgetItem(f"💬 {title}: ✅ {links_count} ❌ {errors_count}")
+            item.setData(Qt.UserRole, title)
+            self.chat_list.addItem(item)
+        if self.current_chat:
+            self.update_logs()
+
+    def toggle_logs(self, item):
+        chat_title = item.data(Qt.UserRole)
+        if self.current_chat == chat_title:
+            self.log_list.setVisible(False)
+            self.current_chat = None
+        else:
+            self.current_chat = chat_title
+            self.update_logs()
+            self.log_list.setVisible(True)
+
+    def update_logs(self):
+        self.log_list.clear()
+        if self.current_chat in state.chat_logs:
+            for timestamp, level, msg, sender_info in state.chat_logs[self.current_chat]:
+                formatted_msg = f"{timestamp} {msg}"
+                if sender_info:
+                    formatted_msg += f" ({sender_info})"
+                item = QListWidgetItem(formatted_msg)
+                if level == 'ERROR':
+                    item.setForeground(QColor('red'))
+                elif level == 'WARNING':
+                    item.setForeground(QColor('yellow'))
+                elif level == 'INFO':
+                    item.setForeground(QColor('light green'))
+                self.log_list.addItem(item)
 
 def main():
     init_db()
